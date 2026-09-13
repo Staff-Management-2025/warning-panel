@@ -722,3 +722,12 @@ a:focus-visible {
     gap: 5px;
   }
 }
+.connection-details {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+.connection-details p {
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}

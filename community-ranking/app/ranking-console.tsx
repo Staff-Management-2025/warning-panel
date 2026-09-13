@@ -186,16 +186,21 @@ export default function Console({ signedIn }: { signedIn: boolean }) {
         next = (await request<{ job: Job }>("execute", { jobId: current.id }))
           .job;
         setJob(next);
-        if (!["queued", "running"].includes(next.status)) break;
+        if (next.paused || !["queued", "running"].includes(next.status)) break;
         await new Promise((resolve) => setTimeout(resolve, 600));
       }
       await refresh();
-      if (!halted.current)
-        setMessage(
-          next.status === "completed"
-            ? "Command complete. Changes checked with Roblox."
-            : "Review the command result below.",
-        );
+      if (!halted.current) {
+        if (next.status === "completed")
+          setMessage("Command complete. Changes checked with Roblox.");
+        else {
+          setMessage("");
+          setError(
+            next.error ||
+              "The command did not complete. Review the result below.",
+          );
+        }
+      }
     } catch (e) {
       setError(
         (e as Error).message +
@@ -530,22 +535,31 @@ export default function Console({ signedIn }: { signedIn: boolean }) {
                         `${job.skipped} excluded or unchanged.`}
                     </p>
                     {job.target_role_name && job.status === "preview" && (
-                      <p className="small-note">This replaces previous non-base roles with the selected role. The base Member role stays.</p>
+                      <p className="small-note">
+                        This replaces previous non-base roles with the selected
+                        role. The base Member role stays.
+                      </p>
                     )}
                     {job.total > 0 && job.status !== "preview" && (
                       <>
                         <Progress
-                          value={
-                            ((job.completed + job.failed) / job.total) * 100
-                          }
-                          aria-label="Command progress"
+                          value={(job.completed / job.total) * 100}
+                          aria-label="Successfully completed changes"
                         />
                         <p className="small-note">
-                          {job.completed} completed · {job.failed} failed
+                          {job.completed} completed · {job.failed} failed ·{" "}
+                          {job.total - job.completed - job.failed} pending
                         </p>
                       </>
                     )}
                     {job.error && <p className="error-text">{job.error}</p>}
+                    {job.paused && job.status === "running" && (
+                      <p className="small-note">
+                        Paused after Roblox rejected access. Fix the connection
+                        before resuming pending members. Review failed members
+                        separately.
+                      </p>
+                    )}
                     {["preview", "queued", "running"].includes(job.status) &&
                       job.total > 0 && (
                         <div className="job-actions">
@@ -608,6 +622,42 @@ export default function Console({ signedIn }: { signedIn: boolean }) {
                     <p className="small-note">
                       Your rank is checked again before every change.
                     </p>
+                    {state.connection && (
+                      <div className="connection-details">
+                        <h3>Roblox connection</h3>
+                        <p>
+                          {state.connection.username
+                            ? `Requests run as @${state.connection.username}.`
+                            : "The connected Roblox account could not be identified."}
+                        </p>
+                        <p>
+                          Key scope:{" "}
+                          {state.connection.writeScope
+                            ? "group read / write"
+                            : "write access missing"}
+                          . Roblox checks the account's role permissions
+                          separately.
+                        </p>
+                        <p>
+                          Kick / Ban:{" "}
+                          {state.connection.moderationConnected
+                            ? "session configured; Roblox permissions still apply"
+                            : "moderation session not connected"}
+                          .
+                        </p>
+                        {state.connection.error && (
+                          <p className="error-text">{state.connection.error}</p>
+                        )}
+                        <a
+                          className="text-link"
+                          href="https://create.roblox.com/docs/cloud/auth/api-keys"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Connection setup help <ExternalLink size={13} />
+                        </a>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>

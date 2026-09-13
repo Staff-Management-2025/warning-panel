@@ -74,3 +74,19 @@ save intent before each external mutation, and reconcile interrupted operations.
 Partial or uncertain changes are reported for manual inspection with Check Roles.
 Previews expire after ten minutes. Bulk operations are capped at 5,000 members.
 No real rank-change or removal test has been performed on community members.
+
+## Troubleshooting a denied command
+
+The Staff access panel identifies the Roblox account behind the server API key.
+That account is separate from the person signed into the website. Roblox requires
+both the `group:write` key scope and sufficient community role-assignment
+permissions on the key's account. A custom role called Owner does not confer
+actual group ownership. Check the account's **Assign or remove roles from members**
+permission and its hierarchy above the intended role in Creator Hub.
+
+The September 13 diagnostic retry of the user's `Promote me77nu 5` returned
+HTTP 403 `PERMISSION_DENIED`; no membership changed. The active API key's account
+was PeterGriffin123898, with group read/write scopes enabled. No community members
+were kicked or banned in testing. The website now identifies the rejected account,
+pauses batches on authentication/permission failures, and separates failures from
+successful progress. Repair the Roblox-side authorization before retrying.

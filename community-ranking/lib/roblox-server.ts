@@ -22,6 +22,68 @@ type CloudRole = {
 let roleCache: { roles: Role[]; until: number } | undefined;
 let memberCache: { members: RobloxUser[]; until: number } | undefined;
 
+export class RobloxApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "RobloxApiError";
+  }
+}
+
+export type ConnectionStatus = {
+  username?: string;
+  userId?: string;
+  readScope: boolean;
+  writeScope: boolean;
+  moderationConnected: boolean;
+  error?: string;
+};
+let connectionCache: { value: ConnectionStatus; until: number } | undefined;
+
+export async function connectionStatus(): Promise<ConnectionStatus> {
+  if (connectionCache && connectionCache.until > Date.now())
+    return connectionCache.value;
+  const value: ConnectionStatus = {
+    readScope: false,
+    writeScope: false,
+    moderationConnected: removalConnected(),
+  };
+  try {
+    const info = await json<{
+      authorizedUserId?: number;
+      enabled?: boolean;
+      expired?: boolean;
+      scopes?: { name: string; operations: string[] }[];
+    }>("https://apis.roblox.com/api-keys/v1/introspect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: setting("ROBLOX_API_KEY") }),
+    });
+    if (!info.enabled || info.expired)
+      throw new Error(
+        "The Roblox API key is disabled or expired. Update the server connection.",
+      );
+    const scopes = info.scopes?.filter((scope) => scope.name === "group") || [];
+    value.readScope = scopes.some((scope) => scope.operations.includes("read"));
+    value.writeScope = scopes.some((scope) =>
+      scope.operations.includes("write"),
+    );
+    if (info.authorizedUserId) {
+      value.userId = String(info.authorizedUserId);
+      value.username = (await profile(value.userId)).name;
+    }
+    if (!value.writeScope)
+      value.error =
+        "The Roblox key is missing group write access. The owner must enable group:write in Creator Hub.";
+  } catch (error) {
+    value.error = (error as Error).message;
+  }
+  connectionCache = { value, until: Date.now() + 30000 };
+  return value;
+}
+
 async function json<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -32,9 +94,15 @@ async function json<T>(url: string, init: RequestInit = {}): Promise<T> {
       throw new Error(
         "Roblox is rate-limiting requests. Wait a moment, then try again.",
       );
-    if (response.status === 401 || response.status === 403)
-      throw new Error(
-        "Roblox denied this operation. The community connection may need renewed credentials or permission.",
+    if (response.status === 401)
+      throw new RobloxApiError(
+        401,
+        "Roblox rejected the server credential. It may be invalid or expired; update the connection before retrying.",
+      );
+    if (response.status === 403)
+      throw new RobloxApiError(
+        403,
+        "Roblox denied this operation: insufficient account permissions.",
       );
     throw new Error(
       `Roblox could not complete the request (${response.status}).`,
@@ -205,20 +273,39 @@ export async function setRole(member: Membership, role: Role, roles: Role[]) {
   const desired = `groups/${GROUP_ID}/roles/${role.id}`;
   // Modern communities can hold multiple roles. Assign first, then replace old
   // non-base roles, so a demotion does not leave a higher role still attached.
-  await cloud(`${member.path}:assignRole`, {
-    method: "POST",
-    body: JSON.stringify({ role: desired }),
-  });
+  const change = async (
+    operation: "assignRole" | "unassignRole",
+    target: string,
+  ) => {
+    try {
+      await cloud(`${member.path}:${operation}`, {
+        method: "POST",
+        body: JSON.stringify({ role: target }),
+      });
+    } catch (error) {
+      if (error instanceof RobloxApiError && error.status === 403) {
+        const connection = await connectionStatus();
+        const account = connection.username
+          ? `@${connection.username}`
+          : "the connected Roblox account";
+        throw new RobloxApiError(
+          403,
+          connection.writeScope
+            ? `Roblox refused ${operation === "assignRole" ? "to assign" : "to remove"} this role for ${account}. The key has group:write, but the account needs Assign or remove roles from members permission and authority above this role. A role named Owner does not make an account the community owner. Check Roles before retrying.`
+            : `Roblox refused the role change for ${account}. ${connection.error || "Enable group:write for its API key."}`,
+        );
+      }
+      throw error;
+    }
+  };
+  await change("assignRole", desired);
   for (const old of member.roles || (member.role ? [member.role] : [])) {
     if (
       old === desired ||
       roles.some((item) => item.isBase && old.endsWith(`/${item.id}`))
     )
       continue;
-    await cloud(`${member.path}:unassignRole`, {
-      method: "POST",
-      body: JSON.stringify({ role: old }),
-    });
+    await change("unassignRole", old);
   }
   const actual = assignedRoles(
     await membership(member.user.split("/").pop()!),
@@ -258,10 +345,21 @@ export async function removeMember(userId: string, action: "kick" | "ban") {
       ...init,
       headers: { ...init.headers, "x-csrf-token": csrf },
     });
-  if (!response.ok)
+  if (!response.ok) {
+    if (response.status === 401)
+      throw new RobloxApiError(
+        401,
+        "The Roblox moderation session is invalid or expired. Reconnect it before retrying.",
+      );
+    if (response.status === 403)
+      throw new RobloxApiError(
+        403,
+        "Roblox blocked the moderation request. Check the connected account's community removal permissions; complete any Roblox verification directly on Roblox.",
+      );
     throw new Error(
       `Roblox did not confirm the ${action} (${response.status}).`,
     );
+  }
   if (action === "kick") {
     if (await membership(userId))
       throw new Error("Roblox still reports this user as a member.");

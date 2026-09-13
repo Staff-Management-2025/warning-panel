@@ -4,6 +4,8 @@ import { staffAccount, membershipRoles } from "@/lib/server-service";
 import {
   allMemberships,
   assignedRoles,
+  connectionStatus,
+  RobloxApiError,
   avatars,
   exactUser,
   getRoles,
@@ -84,18 +86,20 @@ export async function GET(request: Request) {
     if (!account)
       return reply({ roles: initialRoles, staff: null, jobs: [], ready: true });
     const staff = await staffAccount(viewer.userId, true);
-    const [roles, jobs] = await Promise.all([
+    const [roles, jobs, connection] = await Promise.all([
       getRoles(),
       database("history", { siteUserId: viewer.userId }),
+      connectionStatus(),
     ]);
     return reply({
       roles,
       staff,
       jobs,
       ready: true,
+      connection,
       notice: removalConnected()
         ? undefined
-        : "Kick and Ban need a Roblox moderation connection. Rank commands and Check Roles are available.",
+        : "Kick and Ban are not connected. Check Roles can read memberships; changing roles also requires permission on the connected Roblox account.",
     });
   } catch (error) {
     return reply({ error: (error as Error).message }, 400);
@@ -191,6 +195,14 @@ export async function POST(request: Request) {
         throw new Error(
           "Community Kick and Ban need a signed-in Roblox moderation connection. The API key supports role changes, but not these community removal endpoints.",
         );
+      if (role) {
+        const connection = await connectionStatus();
+        if (!connection.writeScope)
+          throw new Error(
+            connection.error ||
+              "The Roblox key is missing group:write permission.",
+          );
+      }
       let candidates: Membership[];
       if (command.all) candidates = await allMemberships();
       else {
@@ -254,6 +266,7 @@ export async function POST(request: Request) {
         jobId,
         lease,
       });
+      let paused = false;
       if (["completed", "partial", "cancelled"].includes(job.status))
         return reply({ job: safeJob(job) });
       try {
@@ -333,6 +346,15 @@ export async function POST(request: Request) {
             } catch (error) {
               item.status = "failed";
               item.error = (error as Error).message;
+              // Do not send thousands of doomed requests when the connection
+              // itself is rejected. Leave remaining members available to resume.
+              if (
+                error instanceof RobloxApiError &&
+                [401, 403].includes(error.status)
+              ) {
+                paused = true;
+                break;
+              }
             }
           }
           await database("saveJob", {
@@ -352,7 +374,7 @@ export async function POST(request: Request) {
           release: true,
         });
       }
-      return reply({ job: safeJob(job) });
+      return reply({ job: { ...safeJob(job), paused } });
     }
     return reply({ error: "Unknown command operation." }, 400);
   } catch (error) {

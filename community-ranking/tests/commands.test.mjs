@@ -193,3 +193,49 @@ test("Kick and Ban cannot silently fall back to an API key", async () => {
     /moderation session/,
   );
 });
+
+test("role permission failures name the connected account and retain HTTP status", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url.endsWith("/introspect"))
+      return Response.json({
+        enabled: true,
+        expired: false,
+        authorizedUserId: 123,
+        scopes: [{ name: "group", operations: ["read", "write"] }],
+      });
+    if (url.endsWith("/users/123"))
+      return Response.json({
+        id: 123,
+        name: "TestBot",
+        displayName: "Test Bot",
+      });
+    return Response.json(
+      { code: "PERMISSION_DENIED", message: "Insufficient permissions" },
+      { status: 403 },
+    );
+  };
+  try {
+    await assert.rejects(
+      () =>
+        roblox.setRole(
+          {
+            path: "groups/526651322/memberships/example",
+            user: "users/200",
+            roles: [rolePath(memberRole)],
+          },
+          moderator,
+          roles,
+        ),
+      (error) => {
+        assert.ok(error instanceof roblox.RobloxApiError);
+        assert.equal(error.status, 403);
+        assert.match(error.message, /@TestBot/);
+        assert.match(error.message, /Assign or remove roles/);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

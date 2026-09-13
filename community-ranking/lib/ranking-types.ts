@@ -19,6 +19,7 @@ export type Job = {
   skipped: number;
   created_at: string;
   error?: string;
+  paused?: boolean;
 };
 export type State = {
   roles: Role[];
@@ -26,6 +27,14 @@ export type State = {
   jobs: Job[];
   ready: boolean;
   notice?: string;
+  connection?: {
+    username?: string;
+    userId?: string;
+    readScope: boolean;
+    writeScope: boolean;
+    moderationConnected: boolean;
+    error?: string;
+  };
 };
 export const initialRoles: Role[] = [
   { id: "682597013", rank: 0, name: "Guest" },
