@@ -87,6 +87,8 @@ export async function connectionStatus(): Promise<ConnectionStatus> {
 async function json<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
     ...init,
+    // Membership and permission checks must never reuse a cached result.
+    cache: "no-store",
     signal: AbortSignal.timeout(12000),
   });
   if (!response.ok) {
@@ -124,6 +126,7 @@ export async function cloud<T>(
     headers: {
       "x-api-key": key,
       "Content-Type": "application/json",
+      "Cache-Control": "no-cache",
       ...init.headers,
     },
   });
@@ -307,17 +310,24 @@ export async function setRole(member: Membership, role: Role, roles: Role[]) {
       continue;
     await change("unassignRole", old);
   }
-  const actual = assignedRoles(
-    await membership(member.user.split("/").pop()!),
-    roles,
+  // Roblox's membership reads can lag behind successful role writes. Retry
+  // only the confirmation reads, never the assign/unassign operations.
+  const allowed = new Set([
+    desired,
+    ...roles.filter((item) => item.isBase)
+      .map((item) => `groups/${GROUP_ID}/roles/${item.id}`),
+  ]);
+  for (const delay of [0, 250, 500, 1000, 2000, 3000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    const actual = await membership(member.user.split("/").pop()!);
+    const paths = actual?.roles || (actual?.role ? [actual.role] : []);
+    // Compare every returned path, including roles absent from an older catalog.
+    if (paths.includes(desired) && paths.every((path) => allowed.has(path)))
+      return;
+  }
+  throw new Error(
+    "Roblox did not confirm the final roles within a few seconds. The changes may already have applied. Use Check Roles before retrying.",
   );
-  if (
-    !actual.some((item) => item.id === role.id) ||
-    actual.some((item) => !item.isBase && item.id !== role.id)
-  )
-    throw new Error(
-      "Roblox did not confirm all role changes. Check Roles before trying again.",
-    );
 }
 
 export function removalConnected() {

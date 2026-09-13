@@ -73,7 +73,9 @@ Bulk jobs process three members per request, use an exclusive expiring lease,
 save intent before each external mutation, and reconcile interrupted operations.
 Partial or uncertain changes are reported for manual inspection with Check Roles.
 Previews expire after ten minutes. Bulk operations are capped at 5,000 members.
-No real rank-change or removal test has been performed on community members.
+The owner's requested promotion of me77nu to Contributor (5) was verified live
+after the connection permissions were repaired. No community members were kicked
+or banned in testing.
 
 ## Troubleshooting a denied command
 
@@ -84,9 +86,19 @@ permissions on the key's account. A custom role called Owner does not confer
 actual group ownership. Check the account's **Assign or remove roles from members**
 permission and its hierarchy above the intended role in Creator Hub.
 
-The September 13 diagnostic retry of the user's `Promote me77nu 5` returned
-HTTP 403 `PERMISSION_DENIED`; no membership changed. The active API key's account
-was PeterGriffin123898, with group read/write scopes enabled. No community members
-were kicked or banned in testing. The website now identifies the rejected account,
-pauses batches on authentication/permission failures, and separates failures from
-successful progress. Repair the Roblox-side authorization before retrying.
+The initial `Promote me77nu 5` retry returned HTTP 403 `PERMISSION_DENIED`.
+After the owner granted the permissions, the same requested promotion succeeded.
+The active API key's account was PeterGriffin123898. The website identifies the
+rejected account, pauses batches on authentication/permission failures, and
+separates failures from successful progress.
+
+## Delayed role confirmation
+
+The later `Demote me77nu 4` request reported a verification failure, although a
+fresh Roblox membership read confirmed Tester (4). Role writes now use uncached
+reads and allow up to 6.75 seconds of backoff for membership data to catch up.
+Only verification reads are retried; role writes are not repeated. Success
+requires the selected role and no other non-base role, including unknown role
+paths missing from the current catalog. An unconfirmed result explicitly says
+the change may already have applied. Check Roles before issuing another change;
+previous command-history entries retain their original results.

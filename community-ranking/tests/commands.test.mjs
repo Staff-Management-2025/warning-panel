@@ -186,6 +186,82 @@ test("incomplete Roblox changes cannot be reported as success", async () => {
   }
 });
 
+test("demotion waits for fresh membership data without repeating writes", async () => {
+  const realFetch = globalThis.fetch;
+  const member = {
+    path: "groups/526651322/memberships/example",
+    user: "users/200",
+    roles: [rolePath(admin)],
+  };
+  const writes = [];
+  let reads = 0;
+  globalThis.fetch = async (url, init) => {
+    if (init.method === "POST") {
+      writes.push({ url, role: JSON.parse(init.body).role });
+      return Response.json({});
+    }
+    reads++;
+    // Roblox can still return the old role or both roles just after a change.
+    const held = reads === 1 ? member.roles
+      : reads === 2 ? [rolePath(admin), rolePath(moderator)]
+      : [rolePath(moderator), rolePath(memberRole)];
+    return Response.json({ groupMemberships: [{ ...member, roles: held }] });
+  };
+  try {
+    await roblox.setRole(member, moderator, roles);
+    assert.equal(reads, 3);
+    assert.deepEqual(writes.map(write => write.role), [rolePath(moderator), rolePath(admin)]);
+    assert.match(writes[0].url, /:assignRole$/);
+    assert.match(writes[1].url, /:unassignRole$/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("verification does not hide an unexpected role missing from the role catalog", async () => {
+  const realFetch = globalThis.fetch;
+  const member = {
+    path: "groups/526651322/memberships/example",
+    user: "users/200",
+    roles: [rolePath(admin)],
+  };
+  globalThis.fetch = async (_url, init) => Response.json(
+    init.method === "POST" ? {} : {
+      groupMemberships: [{
+        ...member,
+        roles: [rolePath(moderator), "groups/526651322/roles/unknown"],
+      }],
+    },
+  );
+  try {
+    await assert.rejects(() => roblox.setRole(member, moderator, roles), /confirm/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("membership reads explicitly bypass caches", async () => {
+  const realFetch = globalThis.fetch;
+  const reads = [];
+  globalThis.fetch = async (_url, init) => {
+    reads.push(init);
+    return Response.json({ groupMemberships: [] });
+  };
+  try {
+    await roblox.membership("200");
+    await roblox.membership("200");
+    assert.equal(reads.length, 2);
+    for (const request of reads) {
+      assert.equal(request.cache, "no-store");
+      assert.equal(request.headers["Cache-Control"], "no-cache");
+      assert.ok(request.signal);
+    }
+    assert.notEqual(reads[0].signal, reads[1].signal);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("Kick and Ban cannot silently fall back to an API key", async () => {
   assert.equal(roblox.removalConnected(), false);
   await assert.rejects(
