@@ -12,6 +12,8 @@ import {
   LoaderCircle,
   LockKeyhole,
   RefreshCw,
+  Save,
+  RotateCcw,
   ShieldCheck,
   Terminal,
   Users,
@@ -34,6 +36,7 @@ import {
   type Role,
   type Staff,
   type State,
+  type RankSaveSummary,
 } from "@/lib/ranking-types";
 
 type Proof = { code: string; userId: string };
@@ -171,7 +174,10 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
   }
   async function preview(event: React.FormEvent) {
     event.preventDefault();
-    if (!command.trim()) return;
+    await previewCommand(command);
+  }
+  async function previewCommand(text: string) {
+    if (!text.trim()) return;
     setBusy("preview");
     setError("");
     setMessage("");
@@ -179,12 +185,14 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
     setInspection(null);
     setSuggestions([]);
     try {
-      const data = await request<{ inspection?: Inspection; job: Job }>(
+      const data = await request<{ inspection?: Inspection; job?: Job; rankSave?: RankSaveSummary; message?: string }>(
         "preview",
-        { command },
+        { command: text },
       );
       if (data.inspection) setInspection(data.inspection);
-      else setJob(data.job);
+      else if (data.job) setJob(data.job);
+      if (data.message) setMessage(data.message);
+      if (data.rankSave) setState((previous) => ({ ...previous, rankSave: data.rankSave }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -490,6 +498,28 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                     </>
                   )}
                 </div>
+                {state.staff?.isOwner && (
+                  <div className="rank-save-panel">
+                    <p className="eyebrow">OWNER / RANK DATASTORE</p>
+                    <p className="small-note">
+                      {state.rankSave
+                        ? `Latest save: ${new Date(state.rankSave.created_at).toLocaleString()} · ${state.rankSave.member_count} members`
+                        : "No ranks saved yet."}
+                    </p>
+                    <div className="command-examples">
+                      <button disabled={working} onClick={() => void previewCommand("SaveRank")}>
+                        <Save size={14} /> Save Rank Datastore
+                      </button>
+                      <button disabled={working || !state.rankSave} onClick={() => {
+                        fill("RestoreRank");
+                        void previewCommand("RestoreRank");
+                      }}>
+                        <RotateCcw size={14} /> RestoreRank
+                      </button>
+                    </div>
+                    <p className="small-note">Save every current role. RestoreRank reviews the latest save before changing members.</p>
+                  </div>
+                )}
                 {error && (
                   <div role="alert" className="feedback error-feedback">
                     {error}
@@ -563,7 +593,20 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                       {job.skipped > 0 &&
                         `${job.skipped} excluded or unchanged.`}
                     </p>
-                    {job.target_role_name && job.status === "preview" && (
+                    {job.action === "restore" && job.status === "preview" && (
+                      <>
+                        <p className="small-note">Restore every saved role for the members below. New members, departed members and protected or deleted roles are left alone.</p>
+                        <div className="restore-changes">
+                          {job.changes?.map((change) => (
+                            <div key={change.userId} className="restore-change">
+                              <a className="text-link" href={`https://www.roblox.com/users/${change.userId}/profile`} target="_blank" rel="noreferrer">Member {change.userId} <ExternalLink size={12} /></a>
+                              <span>{change.before.join(", ")} → <strong>{change.after.join(", ")}</strong></span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                    {job.action !== "restore" && job.target_role_name && job.status === "preview" && (
                       <p className="small-note">
                         This replaces previous non-base roles with the selected
                         role. The base Member role stays.

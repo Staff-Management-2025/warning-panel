@@ -1,4 +1,4 @@
-// This endpoint accepts only the private Sites server's high-entropy bridge token.
+// This endpoint accepts only the private command server's high-entropy bridge token.
 // Its SHA-256 fingerprint is safe to commit. No Roblox or database secret belongs here.
 const BRIDGE_SHA256 =
   "6bceaaa8e1e936d597898bda281adcc98064135b01f21297fcdb4f8f6ba1b2d3";
@@ -56,6 +56,19 @@ Deno.serve(async (request) => {
       return json({ error: "Invalid account." }, 400);
     const actor = encodeURIComponent(p.siteUserId);
     switch (p.action) {
+      case "rankSnapshot":
+      case "rankSnapshotSummary":
+      case "saveRankSnapshot": {
+        const account = (await storage(`ranking_accounts?site_user_id=eq.${actor}&limit=1`))[0];
+        if (account?.roblox_id !== "7468655528")
+          return json({ error: "Only the Owner can access rank saves." }, 403);
+        if (p.action === "saveRankSnapshot")
+          return json(await storage("rpc/ranking_save_rank_snapshot", "POST", {
+            p_actor: p.siteUserId, p_started_at: p.startedAt, p_members: p.members, p_roles: p.roles,
+          }));
+        const columns = p.action === "rankSnapshotSummary" ? "id,created_at,member_count" : "*";
+        return json((await storage(`ranking_rank_snapshots?order=created_at.desc&limit=1&select=${columns}`))[0] || null);
+      }
       case "account":
         return json(
           (

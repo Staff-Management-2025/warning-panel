@@ -7,6 +7,7 @@ import {
   avatars,
 } from "./roblox-server";
 import type { Staff } from "./ranking-types";
+import { isOwner } from "./command-rules";
 
 export type Account = {
   site_user_id: string;
@@ -41,6 +42,7 @@ export async function staffAccount(
     rank,
     role: held[0].name,
     avatar: pictures.get(account.roblox_id),
+    isOwner: isOwner(account.roblox_id, rank),
   };
 }
 export function membershipRoles(roles: string[]) {

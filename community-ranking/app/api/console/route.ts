@@ -16,6 +16,7 @@ import {
   removeMember,
   searchMembers,
   setRole,
+  restoreRoleSet,
   type Membership,
 } from "@/lib/roblox-server";
 import {
@@ -23,8 +24,10 @@ import {
   eligibleTarget,
   parseCommand,
   resolveRole,
+  requireOwner,
 } from "@/lib/command-rules";
-import { initialRoles, type Job } from "@/lib/ranking-types";
+import { captureRanks, planRestore, restoreAllowed, sameRoleSet, type RankSnapshot } from "@/lib/rank-backups";
+import { initialRoles, type Job, type RankSaveSummary } from "@/lib/ranking-types";
 
 export const dynamic = "force-dynamic";
 type Item = {
@@ -32,6 +35,9 @@ type Item = {
   originalRoles: string[];
   status: "pending" | "processing" | "completed" | "failed";
   error?: string;
+  desiredRoles?: string[];
+  beforeNames?: string[];
+  afterNames?: string[];
 };
 type SavedJob = Job & {
   actor_id: string;
@@ -40,6 +46,7 @@ type SavedJob = Job & {
   is_bulk: boolean;
   items: Item[];
   lease_token?: string;
+  snapshot_id?: string;
 };
 const reply = (value: unknown, status = 200) =>
   Response.json(value, {
@@ -61,6 +68,9 @@ const safeJob = (job: SavedJob): Job => ({
   skipped: job.skipped,
   created_at: job.created_at,
   error: job.error || job.items?.find((item) => item.error)?.error,
+  changes: job.action === "restore" && job.status === "preview"
+    ? job.items.map((item) => ({ userId: item.userId, before: item.beforeNames || [], after: item.afterNames || [] }))
+    : undefined,
 });
 
 export async function GET(request: Request) {
@@ -87,10 +97,11 @@ export async function GET(request: Request) {
     if (!account)
       return reply({ roles: initialRoles, staff: null, jobs: [], ready: true });
     const staff = await staffAccount(viewer.userId, true);
-    const [roles, jobs, connection] = await Promise.all([
+    const [roles, jobs, connection, rankSave] = await Promise.all([
       getRoles(),
       database("history", { siteUserId: viewer.userId }),
       connectionStatus(),
+      staff.isOwner ? database("rankSnapshotSummary", { siteUserId: viewer.userId }) : Promise.resolve(null),
     ]);
     return reply({
       roles,
@@ -98,6 +109,7 @@ export async function GET(request: Request) {
       jobs,
       ready: true,
       connection,
+      rankSave,
       notice: removalConnected()
         ? undefined
         : "Kick and Ban are not connected. Check Roles can read memberships; changing roles also requires permission on the connected Roblox account.",
@@ -174,11 +186,42 @@ export async function POST(request: Request) {
     if (body.action === "preview") {
       const raw = String(body.command || "").trim();
       const command = parseCommand(raw);
+      if (command.action === "save" || command.action === "restore")
+        requireOwner(staff.id, staff.rank);
       const roles = await getRoles(true);
       const role = command.roleToken
         ? resolveRole(roles, command.roleToken)
         : undefined;
-      authorizeCommand(command, staff.rank, role);
+      authorizeCommand(command, staff.rank, role, staff.id);
+      if (command.action === "save") {
+        const startedAt = new Date().toISOString();
+        const members = captureRanks(await allMemberships(), roles);
+        const currentStaff = await staffAccount(siteUserId);
+        requireOwner(currentStaff.id, currentStaff.rank);
+        const rankSave = await database<RankSaveSummary>("saveRankSnapshot", {
+          siteUserId, startedAt, members, roles,
+        });
+        return reply({ rankSave, message: `Saved all roles for ${rankSave.member_count} community members.` });
+      }
+      if (command.action === "restore") {
+        const snapshot = await database<RankSnapshot | null>("rankSnapshot", { siteUserId });
+        if (!snapshot) throw new Error("No saved ranks yet. Click Save Rank Datastore first.");
+        const plan = planRestore(snapshot, await allMemberships(), roles, staff.id);
+        if (!plan.items.length)
+          return reply({ message: `No roles need restoring. ${plan.unchanged} unchanged; ${plan.unavailable} unavailable or protected.` });
+        const connection = await connectionStatus();
+        if (!connection.writeScope) throw new Error(connection.error || "The Roblox key needs group:write permission.");
+        const job = await database<SavedJob>("createJob", {
+          siteUserId,
+          job: {
+            actor_roblox_id: staff.id, command: "RestoreRank", action: "restore",
+            target_role_name: `Saved roles from ${snapshot.created_at}`, snapshot_id: snapshot.id,
+            is_bulk: true, items: plan.items, total: plan.items.length,
+            skipped: plan.unchanged + plan.unavailable,
+          },
+        });
+        return reply({ job: safeJob(job) });
+      }
       if (command.action === "check") {
         const user = await exactUser(command.target);
         const held = assignedRoles(await membership(String(user.id)), roles);
@@ -256,11 +299,12 @@ export async function POST(request: Request) {
       if (["completed", "partial", "cancelled"].includes(stored.status))
         return reply({ job: safeJob(stored) });
       const command = parseCommand(stored.command);
+      if (command.action === "restore") requireOwner(staff.id, staff.rank);
       const roles = await getRoles(true);
       const role = stored.target_role_id
         ? resolveRole(roles, stored.target_role_id)
         : undefined;
-      authorizeCommand(command, staff.rank, role);
+      authorizeCommand(command, staff.rank, role, staff.id);
       const lease = crypto.randomUUID();
       let job = await database<SavedJob>("claimJob", {
         siteUserId,
@@ -281,12 +325,20 @@ export async function POST(request: Request) {
           const currentRole = role
             ? resolveRole(currentRoles, role.id)
             : undefined;
-          authorizeCommand(command, currentStaff.rank, currentRole);
+          authorizeCommand(command, currentStaff.rank, currentRole, currentStaff.id);
           const member = await membership(item.userId);
           const held = assignedRoles(member, currentRoles);
           const recovered = item.status === "processing";
+          const restoring = command.action === "restore";
+          const desiredRoles = item.desiredRoles || [];
+          const canRestore = restoring && member && restoreAllowed(
+            item.userId, currentStaff.id, membershipRolePaths(member), desiredRoles, currentRoles,
+          );
           if (recovered) {
             if (
+              canRestore && sameRoleSet(membershipRolePaths(member), desiredRoles, currentRoles)
+            ) item.status = "completed";
+            else if (
               currentRole &&
               held.some((r) => r.id === currentRole.id) &&
               held.every((r) => r.isBase || r.id === currentRole.id)
@@ -310,14 +362,14 @@ export async function POST(request: Request) {
           }
           if (
             !member ||
-            !eligibleTarget(
+            !(restoring ? canRestore : eligibleTarget(
               command,
               currentStaff.id,
               currentStaff.rank,
               item.userId,
               held[0]?.rank || 0,
               currentRole,
-            ) ||
+            )) ||
             membershipRoles(item.originalRoles) !==
               membershipRoles(membershipRolePaths(member))
           ) {
@@ -335,7 +387,8 @@ export async function POST(request: Request) {
               release: false,
             });
             try {
-              if (currentRole) await setRole(member, currentRole, currentRoles);
+              if (restoring) await restoreRoleSet(member, desiredRoles, currentRoles);
+              else if (currentRole) await setRole(member, currentRole, currentRoles);
               else
                 await removeMember(
                   item.userId,

@@ -1,13 +1,28 @@
 import type { Role } from "./ranking-types";
 
+export const OWNER_USER_ID = "7468655528";
+
+export function isOwner(actorId: string, actorRank: number) {
+  return actorId === OWNER_USER_ID && actorRank === 255;
+}
+
+export function requireOwner(actorId: string, actorRank: number) {
+  if (!isOwner(actorId, actorRank))
+    throw new Error("Only Liam's verified community Owner account can save or restore ranks.");
+}
+
 export type Command = {
-  action: "promote" | "demote" | "kick" | "ban" | "check";
+  action: "promote" | "demote" | "kick" | "ban" | "check" | "save" | "restore";
   target: string;
   all: boolean;
   roleToken?: string;
 };
 export function parseCommand(input: string): Command {
   const text = input.trim();
+  if (/^(saverank|save rank datastore)$/i.test(text))
+    return { action: "save", target: "all", all: true };
+  if (/^restorerank$/i.test(text))
+    return { action: "restore", target: "all", all: true };
   const check = /^check\s+roles\s+([A-Za-z0-9_]{3,20})$/i.exec(text);
   if (check && check[1].toLowerCase() !== "all")
     return { action: "check", target: check[1], all: false };
@@ -52,7 +67,12 @@ export function authorizeCommand(
   command: Command,
   actorRank: number,
   role?: Role,
+  actorId = "",
 ) {
+  if (command.action === "save" || command.action === "restore") {
+    requireOwner(actorId, actorRank);
+    return;
+  }
   if (actorRank < 9) throw new Error("Admin rank 9 or higher is required.");
   if (command.all && ["kick", "ban"].includes(command.action) && actorRank < 14)
     throw new Error(

@@ -6,7 +6,9 @@ export type Staff = {
   rank: number;
   role: string;
   avatar?: string;
+  isOwner?: boolean;
 };
+export type RankSaveSummary = { id: string; created_at: string; member_count: number };
 export type Job = {
   id: string;
   command: string;
@@ -20,6 +22,7 @@ export type Job = {
   created_at: string;
   error?: string;
   paused?: boolean;
+  changes?: { userId: string; before: string[]; after: string[] }[];
 };
 export type State = {
   roles: Role[];
@@ -27,6 +30,7 @@ export type State = {
   jobs: Job[];
   ready: boolean;
   notice?: string;
+  rankSave?: RankSaveSummary | null;
   connection?: {
     username?: string;
     userId?: string;

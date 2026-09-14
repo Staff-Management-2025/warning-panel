@@ -9,6 +9,8 @@ export async function ensureSettings() {
   secrets = {
     ROBLOX_API_KEY: saved.AUTHORITY_ROBLOX_API_KEY || "",
     RANKING_BRIDGE_TOKEN: saved.AUTHORITY_RANKING_BRIDGE_TOKEN || "",
+    // Optional moderation login stays in Supabase Edge Function secrets.
+    ROBLOX_COMMUNITY_SESSION: Deno.env.get("ROBLOX_COMMUNITY_SESSION")?.trim() || "",
   };
   expires = Date.now() + 60000;
 }

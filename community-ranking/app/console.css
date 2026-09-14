@@ -731,3 +731,13 @@ a:focus-visible {
   font-size: 0.875rem;
   overflow-wrap: anywhere;
 }
+.rank-save-panel {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--border, #303a3d);
+  background: rgba(194, 237, 115, 0.035);
+}
+.rank-save-panel .command-examples { flex-wrap: wrap; }
+.rank-save-panel button:disabled { opacity: 0.5; cursor: not-allowed; }
+.restore-changes { max-height: 300px; overflow: auto; margin: 14px 0; }
+.restore-change { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid #303a3d; overflow-wrap: anywhere; }

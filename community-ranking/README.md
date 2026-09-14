@@ -11,6 +11,8 @@ It lives in `community-ranking/`; the existing warning panel remains separate.
 - `Promote all 7` / `Demote all 1` — review eligible members, then apply a saved batch.
 - `Kick ExactUsername` / `Ban ExactUsername` — community removal, once moderation is connected.
 - `Kick all` / `Ban all` — restricted to Management rank 14 and higher.
+- **Save Rank Datastore** / `SaveRank` — Owner only; save every current member's complete role set.
+- `RestoreRank` — Owner only; review and restore the latest completed save.
 
 All commands require a verified Admin (rank 9+) account. Operators cannot change
 themselves, peers, higher-ranked members, or assign roles at/above their own rank.
@@ -137,3 +139,51 @@ Members. All role inspection, command previews, permission checks, and change
 verification use `membershipRolePaths()` to normalize this response. Empty extra
 roles do not mean the user is a Guest. This case was reproduced with the read-only
 lookup of AdrianAspher; no rank change is needed to verify membership eligibility.
+
+## Owner rank datastore
+
+Run `supabase/rank-backups.sql` once when deploying this feature. Saves are
+immutable rows in `ranking_rank_snapshots`; an incomplete read never replaces
+the previous save. Every save contains member IDs, every assigned role path,
+the role catalog, and timestamps. Captures abort rather than silently truncate
+above the existing 5,000-member limit. The Member role is treated as implicit
+when Roblox omits it alongside other roles.
+
+Both commands require verified Roblox user ID `7468655528` and a fresh rank of
+255. A role merely named Owner does not qualify. The UI receives an `isOwner`
+flag; the server independently enforces the permission during save, preview,
+execution, and before each restored member. Supabase also restricts snapshot
+access to the linked owner identity behind the private server bridge.
+
+Restore previews pin one immutable snapshot and show all affected member IDs
+and before/after role names. Execution uses the existing saved-job leases and
+intent logging, preserves multiple saved roles, and confirms Roblox's returned
+role set. New members are untouched. Departed members, deleted roles, ownership
+and members whose roles changed after review are excluded or reported. Restore
+does not rejoin members, unban accounts, recreate roles, or change ownership.
+Roblox still enforces the connected API account's role-assignment permissions.
+
+Saving takes a paginated read, not an atomic Roblox transaction. The database
+refuses a save if another website command ran during capture. Changes made
+directly on Roblox during that read cannot be locked by this website.
+
+## Connect community Kick and Ban
+
+Roblox's community removal endpoints currently require cookie authentication:
+[Kick](https://create.roblox.com/docs/cloud/reference/features/groups) and
+[Ban](https://create.roblox.com/docs/cloud/reference/features/bans-and-blocks).
+The Open Cloud API key used for ranking cannot authenticate these endpoints.
+
+Use a dedicated Roblox moderation account with **Kick members** and **Ban members**
+permissions and authority above its targets. In the Authority Community Ranking
+Supabase project, open **Edge Functions → Secrets**, then add a secret named
+`ROBLOX_COMMUNITY_SESSION` containing that account's `.ROBLOSECURITY` value.
+The Edge Function now reads this optional secret on the server. Keep the value
+out of source control, public website settings and chat: it is an account login
+credential. No staff member needs to provide a cookie just to use the website.
+
+An expired session or a Roblox security challenge stops moderation; resolve
+verification directly on Roblox and update the server secret when needed.
+The site's connected-status indicator means a secret is configured, not that
+Roblox has confirmed its permissions. Test only with an explicitly chosen test
+member. No real members are removed by the automated test suite.

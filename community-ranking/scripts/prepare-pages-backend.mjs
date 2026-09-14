@@ -1,9 +1,9 @@
 // Copy shared rules into the deployable Edge Function. No credentials are embedded.
 import { readFile, writeFile } from "node:fs/promises";
 const target = "supabase/functions/community-console/";
-for (const name of ["roblox-server", "server-service", "command-rules", "ranking-types"]) {
+for (const name of ["roblox-server", "server-service", "command-rules", "ranking-types", "rank-backups"]) {
   let source = await readFile(`lib/${name}.ts`, "utf8");
-  source = source.replace(/from "\.\/(server-config|roblox-server|ranking-types)"/g, 'from "./$1.ts"');
+  source = source.replace(/from "\.\/([a-z-]+)"/g, 'from "./$1.ts"');
   await writeFile(`${target}${name}.ts`, source);
 }
 let route = await readFile("app/api/console/route.ts", "utf8");

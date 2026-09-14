@@ -337,6 +337,34 @@ export async function setRole(member: Membership, role: Role, roles: Role[]) {
   );
 }
 
+export async function restoreRoleSet(member: Membership, desired: string[], roles: Role[]) {
+  const catalog = new Map(roles.map((role) => [`groups/${GROUP_ID}/roles/${role.id}`, role]));
+  const original = membershipRolePaths(member);
+  if (!desired.length || [...original, ...desired].some((path) => {
+    const role = catalog.get(path);
+    return !role || role.rank <= 0 || role.rank >= 255;
+  })) throw new Error("The saved or current roles are unavailable or protected. No change was made.");
+
+  const wanted = new Set(desired);
+  // Preserve all saved roles, not just the member's highest rank.
+  for (const path of wanted) {
+    if (catalog.get(path)!.isBase || original.includes(path)) continue;
+    await cloud(`${member.path}:assignRole`, { method: "POST", body: JSON.stringify({ role: path }) });
+  }
+  for (const path of original) {
+    if (catalog.get(path)!.isBase || wanted.has(path)) continue;
+    await cloud(`${member.path}:unassignRole`, { method: "POST", body: JSON.stringify({ role: path }) });
+  }
+  const normalize = (paths: string[]) => [...new Set(paths)]
+    .filter((path) => !catalog.get(path)?.isBase).sort().join("|");
+  for (const delay of [0, 250, 500, 1000, 2000, 3000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    const actual = await membership(member.user.split("/").pop()!);
+    if (actual && normalize(membershipRolePaths(actual)) === normalize(desired)) return;
+  }
+  throw new Error("Roblox did not confirm every restored role. Some changes may have applied; use Check Roles before retrying.");
+}
+
 export function removalConnected() {
   return Boolean(setting("ROBLOX_COMMUNITY_SESSION"));
 }
