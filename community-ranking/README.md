@@ -9,8 +9,6 @@ It lives in `community-ranking/`; the existing warning panel remains separate.
 - `Check Roles ExactUsername` — show every assigned community role, its name, rank, and ID.
 - `Promote ExactUsername 7` / `Demote ExactUsername 1` — move to a rank or full role ID.
 - `Promote all 7` / `Demote all 1` — review eligible members, then apply a saved batch.
-- `Kick ExactUsername` / `Ban ExactUsername` — community removal, once moderation is connected.
-- `Kick all` / `Ban all` — restricted to Management rank 14 and higher.
 - **Save Rank Datastore** / `SaveRank` — Owner only; save every current member's complete role set.
 - `RestoreRank` — Owner only; review and restore the latest completed save.
 
@@ -48,12 +46,6 @@ committed SHA-256 fingerprint is not the token. Database tables have RLS enabled
 browser privileges revoked, and no public policies. The Supabase advisor's
 [RLS-without-policies notice](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy)
 is intentional: only the authenticated server bridge accesses these tables.
-
-Community Kick/Ban currently use Roblox cookie-authenticated endpoints, not the
-Open Cloud API key. They remain unavailable without `ROBLOX_COMMUNITY_SESSION`,
-configured privately by the operator of a dedicated moderation account. Never
-ask staff to paste account cookies into the website. See Roblox's
-[community ban reference](https://create.roblox.com/docs/cloud/reference/features/bans-and-blocks).
 
 ## Running and checking
 
@@ -167,23 +159,6 @@ Saving takes a paginated read, not an atomic Roblox transaction. The database
 refuses a save if another website command ran during capture. Changes made
 directly on Roblox during that read cannot be locked by this website.
 
-## Connect community Kick and Ban
-
-Roblox's community removal endpoints currently require cookie authentication:
-[Kick](https://create.roblox.com/docs/cloud/reference/features/groups) and
-[Ban](https://create.roblox.com/docs/cloud/reference/features/bans-and-blocks).
-The Open Cloud API key used for ranking cannot authenticate these endpoints.
-
-Use a dedicated Roblox moderation account with **Kick members** and **Ban members**
-permissions and authority above its targets. In the Authority Community Ranking
-Supabase project, open **Edge Functions → Secrets**, then add a secret named
-`ROBLOX_COMMUNITY_SESSION` containing that account's `.ROBLOSECURITY` value.
-The Edge Function now reads this optional secret on the server. Keep the value
-out of source control, public website settings and chat: it is an account login
-credential. No staff member needs to provide a cookie just to use the website.
-
-An expired session or a Roblox security challenge stops moderation; resolve
-verification directly on Roblox and update the server secret when needed.
-The site's connected-status indicator means a secret is configured, not that
-Roblox has confirmed its permissions. Test only with an explicitly chosen test
-member. No real members are removed by the automated test suite.
+Kick and Ban have been removed at the owner's request. The website uses only
+the Roblox Open Cloud API key; no Roblox login cookie is needed. Historical
+command records are retained, but pending removal commands cannot be resumed.

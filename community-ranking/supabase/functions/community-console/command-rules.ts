@@ -12,7 +12,7 @@ export function requireOwner(actorId: string, actorRank: number) {
 }
 
 export type Command = {
-  action: "promote" | "demote" | "kick" | "ban" | "check" | "save" | "restore";
+  action: "promote" | "demote" | "check" | "save" | "restore";
   target: string;
   all: boolean;
   roleToken?: string;
@@ -36,15 +36,8 @@ export function parseCommand(input: string): Command {
       all: match[2].toLowerCase() === "all",
       roleToken: match[3],
     };
-  const moderation = /^(kick|ban)\s+([A-Za-z0-9_]{3,20})$/i.exec(text);
-  if (moderation)
-    return {
-      action: moderation[1].toLowerCase() as Command["action"],
-      target: moderation[2],
-      all: moderation[2].toLowerCase() === "all",
-    };
   throw new Error(
-    "Use Promote username rank, Demote username rank, Kick username, Ban username, or Check Roles username. Use all for bulk changes.",
+    "Use Promote username rank, Demote username rank, or Check Roles username. Owners can also use SaveRank and RestoreRank.",
   );
 }
 
@@ -69,15 +62,13 @@ export function authorizeCommand(
   role?: Role,
   actorId = "",
 ) {
+  if (!["promote", "demote", "check", "save", "restore"].includes(command.action))
+    throw new Error("This command is not available.");
   if (command.action === "save" || command.action === "restore") {
     requireOwner(actorId, actorRank);
     return;
   }
   if (actorRank < 9) throw new Error("Admin rank 9 or higher is required.");
-  if (command.all && ["kick", "ban"].includes(command.action) && actorRank < 14)
-    throw new Error(
-      "Kick all and Ban all require Management rank 14 or higher.",
-    );
   if (role && (role.rank <= 0 || role.rank >= 255 || role.rank >= actorRank))
     throw new Error(
       "Choose a member role below your own rank. Guest and Owner are protected.",
@@ -98,5 +89,5 @@ export function eligibleTarget(
     return Boolean(role && targetRank < role.rank);
   if (command.action === "demote")
     return Boolean(role && targetRank > role.rank);
-  return command.action === "kick" || command.action === "ban";
+  return false;
 }

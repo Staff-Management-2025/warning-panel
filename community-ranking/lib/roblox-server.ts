@@ -37,7 +37,6 @@ export type ConnectionStatus = {
   userId?: string;
   readScope: boolean;
   writeScope: boolean;
-  moderationConnected: boolean;
   error?: string;
 };
 let connectionCache: { value: ConnectionStatus; until: number } | undefined;
@@ -48,7 +47,6 @@ export async function connectionStatus(): Promise<ConnectionStatus> {
   const value: ConnectionStatus = {
     readScope: false,
     writeScope: false,
-    moderationConnected: removalConnected(),
   };
   try {
     const info = await json<{
@@ -363,57 +361,4 @@ export async function restoreRoleSet(member: Membership, desired: string[], role
     if (actual && normalize(membershipRolePaths(actual)) === normalize(desired)) return;
   }
   throw new Error("Roblox did not confirm every restored role. Some changes may have applied; use Check Roles before retrying.");
-}
-
-export function removalConnected() {
-  return Boolean(setting("ROBLOX_COMMUNITY_SESSION"));
-}
-export async function removeMember(userId: string, action: "kick" | "ban") {
-  const session = setting("ROBLOX_COMMUNITY_SESSION");
-  if (!session)
-    throw new Error(
-      "Community Kick and Ban need a connected Roblox moderation session. The Open Cloud API key does not support these endpoints.",
-    );
-  const url = `https://groups.roblox.com/v1/groups/${GROUP_ID}/${action === "ban" ? "bans" : "users"}/${userId}`;
-  const init: RequestInit = {
-    method: action === "ban" ? "POST" : "DELETE",
-    headers: {
-      Cookie: `.ROBLOSECURITY=${session}`,
-      "Content-Type": "application/json",
-    },
-    signal: AbortSignal.timeout(12000),
-  };
-  let response = await fetch(url, init);
-  const csrf = response.headers.get("x-csrf-token");
-  if (response.status === 403 && csrf)
-    response = await fetch(url, {
-      ...init,
-      headers: { ...init.headers, "x-csrf-token": csrf },
-    });
-  if (!response.ok) {
-    if (response.status === 401)
-      throw new RobloxApiError(
-        401,
-        "The Roblox moderation session is invalid or expired. Reconnect it before retrying.",
-      );
-    if (response.status === 403)
-      throw new RobloxApiError(
-        403,
-        "Roblox blocked the moderation request. Check the connected account's community removal permissions; complete any Roblox verification directly on Roblox.",
-      );
-    throw new Error(
-      `Roblox did not confirm the ${action} (${response.status}).`,
-    );
-  }
-  if (action === "kick") {
-    if (await membership(userId))
-      throw new Error("Roblox still reports this user as a member.");
-  } else {
-    const check = await fetch(url, {
-      headers: { Cookie: `.ROBLOSECURITY=${session}` },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!check.ok) throw new Error("The community ban could not be verified.");
-  }
-  memberCache = undefined;
 }

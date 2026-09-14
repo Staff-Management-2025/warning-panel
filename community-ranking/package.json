@@ -6,7 +6,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "test": "node --test tests/commands.test.mjs tests/moderation.test.mjs tests/browser-auth.test.mjs tests/rank-backups.test.mjs",
+    "test": "node --test tests/commands.test.mjs tests/removed-commands.test.mjs tests/browser-auth.test.mjs tests/rank-backups.test.mjs",
     "install:ci": "node scripts/install-ci.mjs",
     "dev": "node scripts/run-framework.mjs dev",
     "build": "node scripts/run-framework.mjs build",

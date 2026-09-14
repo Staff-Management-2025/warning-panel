@@ -36,7 +36,6 @@ export type State = {
     userId?: string;
     readScope: boolean;
     writeScope: boolean;
-    moderationConnected: boolean;
     error?: string;
   };
 };

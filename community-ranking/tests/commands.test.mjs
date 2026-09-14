@@ -66,11 +66,9 @@ test("role IDs retain precision and base rank resolves to Member", () => {
   );
 });
 
-test("Admin is required; Management is required only for bulk removals", () => {
+test("Admin is required for ranking and inspection", () => {
   for (const input of [
     "Check Roles username",
-    "Kick username",
-    "Ban username",
     "Promote all 7",
     "Demote all 1",
   ]) {
@@ -78,11 +76,7 @@ test("Admin is required; Management is required only for bulk removals", () => {
     assert.throws(() => rules.authorizeCommand(command, 8));
     assert.doesNotThrow(() => rules.authorizeCommand(command, 9));
   }
-  for (const input of ["Kick all", "Ban all"]) {
-    const command = rules.parseCommand(input);
-    assert.throws(() => rules.authorizeCommand(command, 13));
-    assert.doesNotThrow(() => rules.authorizeCommand(command, 14));
-  }
+
 });
 
 test("self, peers, higher staff and invalid direction are protected", () => {
@@ -307,13 +301,6 @@ test("membership reads explicitly bypass caches", async () => {
   }
 });
 
-test("Kick and Ban cannot silently fall back to an API key", async () => {
-  assert.equal(roblox.removalConnected(), false);
-  await assert.rejects(
-    () => roblox.removeMember("200", "ban"),
-    /moderation session/,
-  );
-});
 
 test("role permission failures name the connected account and retain HTTP status", async () => {
   const originalFetch = globalThis.fetch;

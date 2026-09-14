@@ -125,7 +125,7 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
   }, []);
   useEffect(() => {
     const match =
-      /^(?:promote|demote|kick|ban|check\s+roles)\s+([A-Za-z0-9_]{2,20})$/i.exec(
+      /^(?:promote|demote|check\s+roles)\s+([A-Za-z0-9_]{2,20})$/i.exec(
         command,
       );
     if (!canCommand || !match || match[1].toLowerCase() === "all") {
@@ -457,8 +457,6 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                     ["Demote", "Demote username 1", ArrowDown],
                     ["Promote all", "Promote all 4", Users],
                     ["Demote all", "Demote all 1", Users],
-                    ["Kick", "Kick username", X],
-                    ["Ban", "Ban username", ShieldCheck],
                   ].map(([label, example, Icon]) => {
                     const Symbol = Icon as typeof Users;
                     return (
@@ -485,18 +483,6 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                     <Users size={13} />
                     Check Roles
                   </button>
-                  {state.staff && state.staff.rank >= 14 && (
-                    <>
-                      <button onClick={() => fill("Kick all")}>
-                        <X size={13} />
-                        Kick all
-                      </button>
-                      <button onClick={() => fill("Ban all")}>
-                        <ShieldCheck size={13} />
-                        Ban all
-                      </button>
-                    </>
-                  )}
                 </div>
                 {state.staff?.isOwner && (
                   <div className="rank-save-panel">
@@ -710,13 +696,6 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                           . Roblox checks the account's role permissions
                           separately.
                         </p>
-                        <p>
-                          Kick / Ban:{" "}
-                          {state.connection.moderationConnected
-                            ? "session configured; Roblox permissions still apply"
-                            : "moderation session not connected"}
-                          .
-                        </p>
                         {state.connection.error && (
                           <p className="error-text">{state.connection.error}</p>
                         )}
@@ -841,10 +820,6 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
               <div>
                 <code>Demote all 1</code>
                 <p>Move eligible members to a lower rank.</p>
-              </div>
-              <div>
-                <code>Kick all / Ban all</code>
-                <p>Management 14+ only. Named members: Admin 9+.</p>
               </div>
               <div className="rule-divider" />
               <p>

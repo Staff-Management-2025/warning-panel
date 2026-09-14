@@ -12,8 +12,6 @@ import {
   membership,
   membershipRolePaths,
   profile,
-  removalConnected,
-  removeMember,
   searchMembers,
   setRole,
   restoreRoleSet,
@@ -110,9 +108,6 @@ export async function GET(request: Request) {
       ready: true,
       connection,
       rankSave,
-      notice: removalConnected()
-        ? undefined
-        : "Kick and Ban are not connected. Check Roles can read memberships; changing roles also requires permission on the connected Roblox account.",
     });
   } catch (error) {
     return reply({ error: (error as Error).message }, 400);
@@ -185,10 +180,6 @@ export async function POST(request: Request) {
           },
         });
       }
-      if (["kick", "ban"].includes(command.action) && !removalConnected())
-        throw new Error(
-          "Community Kick and Ban need a signed-in Roblox moderation connection. The API key supports role changes, but not these community removal endpoints.",
-        );
       if (role) {
         const connection = await connectionStatus();
         if (!connection.writeScope)
@@ -294,8 +285,6 @@ export async function POST(request: Request) {
               held.every((r) => r.isBase || r.id === currentRole.id)
             )
               item.status = "completed";
-            else if (command.action === "kick" && !member)
-              item.status = "completed";
             else {
               item.status = "failed";
               item.error =
@@ -339,11 +328,7 @@ export async function POST(request: Request) {
             try {
               if (restoring) await restoreRoleSet(member, desiredRoles, currentRoles);
               else if (currentRole) await setRole(member, currentRole, currentRoles);
-              else
-                await removeMember(
-                  item.userId,
-                  command.action as "kick" | "ban",
-                );
+              else throw new Error("This command is not available.");
               item.status = "completed";
             } catch (error) {
               item.status = "failed";

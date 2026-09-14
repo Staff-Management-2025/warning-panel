@@ -224,16 +224,3 @@ test("restore execution verifies writes, refuses changed previews, and reconcile
     assert.equal(writes, 2, "A completed interrupted request must not be repeated.");
   } finally { globalThis.fetch = originalFetch; }
 });
-
-test("Supabase runtime reads the optional moderation secret without requiring it for ranking", async () => {
-  const previousDeno = globalThis.Deno;
-  globalThis.Deno = { env: { get: (key) => key === "ROBLOX_COMMUNITY_SESSION" ? " test-session " : undefined } };
-  const config = await import(moduleUrl("../supabase/functions/community-console/server-config.ts", {
-    'import { storage } from "./storage.ts";': 'const storage=async()=>({AUTHORITY_ROBLOX_API_KEY:"test-key",AUTHORITY_RANKING_BRIDGE_TOKEN:"test-bridge"});',
-  }));
-  try {
-    await config.ensureSettings();
-    assert.equal(config.setting("ROBLOX_COMMUNITY_SESSION"), "test-session");
-    assert.ok(config.configured());
-  } finally { globalThis.Deno = previousDeno; }
-});
