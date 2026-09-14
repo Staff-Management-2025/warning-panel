@@ -78,7 +78,7 @@ The development sign-in is a Sites preview fixture and is not a staff account.
 ## Maintainer map
 
 - `app/ranking-console.tsx`, `app/console.css`: shared responsive interface.
-- `pages/`: GitHub Pages entry point and opaque-session client.
+- `github-pages/`: GitHub Pages entry point and opaque-session client.
 - `app/api/console/route.ts`: identity checks, role inspection, command review and execution.
 - `lib/command-rules.ts`: command parsing and hierarchy rules.
 - `lib/roblox-server.ts`: Roblox requests and multi-role replacement.
