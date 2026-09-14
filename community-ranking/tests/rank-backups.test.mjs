@@ -224,3 +224,29 @@ test("restore execution verifies writes, refuses changed previews, and reconcile
     assert.equal(writes, 2, "A completed interrupted request must not be repeated.");
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("Change all reviews upward and downward changes together and excludes exact matches", async () => {
+  const originalFetch = globalThis.fetch;
+  const current = [member(owner, [ownerRole]), member("201", [base]), member("202", [mod, admin]), member("203", [mod])];
+  let stored;
+  globalThis.backupFixture = { staff: { id: owner, rank: 255 }, database: async (action, payload) => {
+    assert.equal(action, "createJob");
+    return stored = { id: crypto.randomUUID(), status: "preview", ...payload.job };
+  } };
+  globalThis.fetch = async (url, init) => {
+    if (url.endsWith("/introspect")) return Response.json({ enabled: true, scopes: [{ name: "group", operations: ["read", "write"] }] });
+    assert.notEqual(init.method, "POST", "Review must not write to Roblox.");
+    if (url.includes("/roles?")) return Response.json({ groupRoles: roles.map((r) => ({ ...r, displayName: r.name })) });
+    return Response.json({ groupMemberships: current });
+  };
+  try {
+    let response = await route.POST(request({ action: "preview", command: "Change all 7" }));
+    assert.equal(response.status, 200);
+    assert.equal(stored.action, "change");
+    assert.deepEqual(stored.items.map((i) => i.userId), ["201", "202"]);
+    assert.equal(stored.skipped, 2);
+    response = await route.POST(request({ action: "preview", command: "Change all 1" }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(stored.items.map((i) => i.userId), ["202", "203"]);
+  } finally { globalThis.fetch = originalFetch; }
+});

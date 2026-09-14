@@ -279,8 +279,9 @@ export async function searchMembers(query: string) {
 
 export async function setRole(member: Membership, role: Role, roles: Role[]) {
   const desired = `groups/${GROUP_ID}/roles/${role.id}`;
-  // Modern communities can hold multiple roles. Assign first, then replace old
-  // non-base roles, so a demotion does not leave a higher role still attached.
+  // Member is implicit and cannot be assigned like an extra role. Returning to
+  // Member means removing all non-base roles, while keeping the membership.
+  // Other destinations are assigned before old roles are removed.
   const change = async (
     operation: "assignRole" | "unassignRole",
     target: string,
@@ -306,7 +307,8 @@ export async function setRole(member: Membership, role: Role, roles: Role[]) {
       throw error;
     }
   };
-  await change("assignRole", desired);
+  if (!role.isBase && !membershipRolePaths(member).includes(desired))
+    await change("assignRole", desired);
   for (const old of membershipRolePaths(member)) {
     if (
       old === desired ||
@@ -327,7 +329,7 @@ export async function setRole(member: Membership, role: Role, roles: Role[]) {
     const actual = await membership(member.user.split("/").pop()!);
     const paths = membershipRolePaths(actual);
     // Compare every returned path, including roles absent from an older catalog.
-    if (paths.includes(desired) && paths.every((path) => allowed.has(path)))
+    if (actual && paths.includes(desired) && paths.every((path) => allowed.has(path)))
       return;
   }
   throw new Error(

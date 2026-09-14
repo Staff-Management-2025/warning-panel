@@ -66,6 +66,21 @@ test("role IDs retain precision and base rank resolves to Member", () => {
   );
 });
 
+test("Change accepts a rank or role ID and can move either way without bypassing hierarchy", () => {
+  assert.deepEqual(rules.parseCommand("Change ExampleUser 12884901889"), {
+    action: "change", target: "ExampleUser", all: false, roleToken: "12884901889",
+  });
+  const change = rules.parseCommand("Change all 7");
+  assert.equal(change.all, true);
+  for (const rank of [1, 7, 9])
+    assert.equal(rules.eligibleTarget(change, "100", 255, "200", rank, moderator), true);
+  assert.equal(rules.eligibleTarget(change, "100", 9, "200", 9, moderator), false);
+  assert.equal(rules.eligibleTarget(change, "100", 255, "100", 1, moderator), false);
+  assert.throws(() => rules.authorizeCommand(change, 8, moderator));
+  assert.throws(() => rules.authorizeCommand(change, 9, admin));
+  assert.throws(() => rules.parseCommand("Change all 1; Ban all"));
+});
+
 test("Admin is required for ranking and inspection", () => {
   for (const input of [
     "Check Roles username",
@@ -170,7 +185,7 @@ test("Members with an empty extra-role list remain eligible for promotion", () =
   assert.deepEqual(roblox.membershipRolePaths({ ...member, role: undefined }), []);
 });
 
-test("demoting to Member confirms Roblox's empty extra-role list", async () => {
+test("demoting to Member never assigns the built-in role and confirms the empty extra-role list", async () => {
   const realFetch = globalThis.fetch;
   const member = {
     path: "groups/526651322/memberships/example",
@@ -182,6 +197,8 @@ test("demoting to Member confirms Roblox's empty extra-role list", async () => {
   globalThis.fetch = async (url, init) => {
     if (init.method === "POST") {
       writes.push({ url, role: JSON.parse(init.body).role });
+      if (url.endsWith(":assignRole") && JSON.parse(init.body).role === rolePath(memberRole))
+        return Response.json({ code: "INVALID_ARGUMENT", message: "Cannot assign a base role." }, { status: 400 });
       return Response.json({});
     }
     return Response.json({ groupMemberships: [{
@@ -190,12 +207,43 @@ test("demoting to Member confirms Roblox's empty extra-role list", async () => {
   };
   try {
     await roblox.setRole(member, memberRole, roles);
-    assert.equal(writes.length, 2);
-    assert.match(writes[1].url, /:unassignRole$/);
-    assert.equal(writes[1].role, rolePath(moderator));
+    assert.equal(writes.length, 1);
+    assert.match(writes[0].url, /:unassignRole$/);
+    assert.equal(writes[0].role, rolePath(moderator));
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test("bulk demotion to Member removes every extra role and leaves existing Members alone", async () => {
+  const originalFetch = globalThis.fetch;
+  const members = new Map([
+    ["201", { path: "groups/526651322/memberships/a", user: "users/201", roles: [rolePath(moderator), rolePath(admin)] }],
+    ["202", { path: "groups/526651322/memberships/b", user: "users/202", role: rolePath(memberRole), roles: [] }],
+    ["203", { path: "groups/526651322/memberships/c", user: "users/203", roles: [rolePath(memberRole), rolePath(moderator)] }],
+  ]);
+  const writes = [];
+  globalThis.fetch = async (url, init) => {
+    if (init.method === "POST") {
+      const target = JSON.parse(init.body).role;
+      if (url.endsWith(":assignRole"))
+        return Response.json({ code: "INVALID_ARGUMENT" }, { status: 400 });
+      assert.notEqual(target, rolePath(memberRole), "Never remove the base Member role.");
+      const row = [...members.values()].find((entry) => url.endsWith(`${entry.path}:unassignRole`));
+      assert.ok(row);
+      writes.push(target);
+      row.roles = row.roles.filter((path) => path !== target);
+      if (!row.roles.length) row.role = rolePath(memberRole);
+      return Response.json({});
+    }
+    const id = /users\/(\d+)/.exec(new URL(url).searchParams.get("filter"))[1];
+    return Response.json({ groupMemberships: [members.get(id)] });
+  };
+  try {
+    for (const row of members.values()) await roblox.setRole(structuredClone(row), memberRole, roles);
+    assert.equal(writes.length, 3);
+    for (const row of members.values()) assert.deepEqual(roblox.assignedRoles(row, roles), [memberRole]);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("incomplete Roblox changes cannot be reported as success", async () => {

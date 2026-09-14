@@ -12,7 +12,7 @@ export function requireOwner(actorId: string, actorRank: number) {
 }
 
 export type Command = {
-  action: "promote" | "demote" | "check" | "save" | "restore";
+  action: "change" | "promote" | "demote" | "check" | "save" | "restore";
   target: string;
   all: boolean;
   roleToken?: string;
@@ -26,7 +26,8 @@ export function parseCommand(input: string): Command {
   const check = /^check\s+roles\s+([A-Za-z0-9_]{3,20})$/i.exec(text);
   if (check && check[1].toLowerCase() !== "all")
     return { action: "check", target: check[1], all: false };
-  const match = /^(promote|demote)\s+([A-Za-z0-9_]{3,20})\s+(\d{1,20})$/i.exec(
+  // Retain old spellings for previously reviewed command jobs.
+  const match = /^(change|promote|demote)\s+([A-Za-z0-9_]{3,20})\s+(\d{1,20})$/i.exec(
     text,
   );
   if (match)
@@ -37,7 +38,7 @@ export function parseCommand(input: string): Command {
       roleToken: match[3],
     };
   throw new Error(
-    "Use Promote username rank, Demote username rank, or Check Roles username. Owners can also use SaveRank and RestoreRank.",
+    "Use Change username rank, Change all rank, or Check Roles username. Owners can also use SaveRank and RestoreRank.",
   );
 }
 
@@ -62,7 +63,7 @@ export function authorizeCommand(
   role?: Role,
   actorId = "",
 ) {
-  if (!["promote", "demote", "check", "save", "restore"].includes(command.action))
+  if (!["change", "promote", "demote", "check", "save", "restore"].includes(command.action))
     throw new Error("This command is not available.");
   if (command.action === "save" || command.action === "restore") {
     requireOwner(actorId, actorRank);
@@ -85,6 +86,7 @@ export function eligibleTarget(
 ) {
   if (targetId === actorId || targetRank >= actorRank || targetRank <= 0)
     return false;
+  if (command.action === "change") return Boolean(role);
   if (command.action === "promote")
     return Boolean(role && targetRank < role.rank);
   if (command.action === "demote")

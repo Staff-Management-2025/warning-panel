@@ -201,6 +201,10 @@ export async function POST(request: Request) {
       for (const member of candidates) {
         const userId = member.user.split("/").pop()!;
         const rank = assignedRoles(member, roles)[0]?.rank || 0;
+        // Changing a rank can move either way. Skip only the exact desired role
+        // set, so an extra higher role is still removed when needed.
+        if (role && sameRoleSet(membershipRolePaths(member), [`groups/526651322/roles/${role.id}`], roles))
+          continue;
         if (eligibleTarget(command, staff.id, staff.rank, userId, rank, role))
           items.push({
             userId,
@@ -210,7 +214,7 @@ export async function POST(request: Request) {
       }
       if (!items.length)
         throw new Error(
-          "No eligible members. You cannot change yourself or members at or above your rank, and Promote/Demote must move in the requested direction.",
+          "No eligible changes. Members may already have that role, or their rank is protected. You cannot change yourself or members at or above your rank.",
         );
       const job = await database<SavedJob>("createJob", {
         siteUserId,

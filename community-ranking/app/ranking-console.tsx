@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ArrowDown,
-  ArrowUp,
+  ArrowUpDown,
   Check,
   ChevronRight,
   Copy,
@@ -125,7 +124,7 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
   }, []);
   useEffect(() => {
     const match =
-      /^(?:promote|demote|check\s+roles)\s+([A-Za-z0-9_]{2,20})$/i.exec(
+      /^(?:change|check\s+roles)\s+([A-Za-z0-9_]{2,20})$/i.exec(
         command,
       );
     if (!canCommand || !match || match[1].toLowerCase() === "all") {
@@ -357,7 +356,7 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                                 command.trim()
                                   ? command.trim().replace(/\s+\d+$/, "") +
                                       ` ${role.id}`
-                                  : `Promote username ${role.id}`,
+                                  : `Change username ${role.id}`,
                               )
                             }
                           >
@@ -430,7 +429,7 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                       setCommand(e.target.value);
                       setJob(null);
                     }}
-                    placeholder="Promote username 7"
+                    placeholder="Change username 7"
                     aria-label="Ranking command"
                     maxLength={240}
                     autoComplete="off"
@@ -453,10 +452,8 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                 </form>
                 <div className="command-examples">
                   {[
-                    ["Promote", "Promote username 7", ArrowUp],
-                    ["Demote", "Demote username 1", ArrowDown],
-                    ["Promote all", "Promote all 4", Users],
-                    ["Demote all", "Demote all 1", Users],
+                    ["Change", "Change username 7", ArrowUpDown],
+                    ["Change all", "Change all 1", Users],
                   ].map(([label, example, Icon]) => {
                     const Symbol = Icon as typeof Users;
                     return (
@@ -814,12 +811,12 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
             <section className="rules-panel">
               <p className="eyebrow">COMMAND GUIDE</p>
               <div>
-                <code>Promote username 7</code>
-                <p>Move one member to a higher rank.</p>
+                <code>Change username 7</code>
+                <p>Set one member to a rank or role ID, higher or lower.</p>
               </div>
               <div>
-                <code>Demote all 1</code>
-                <p>Move eligible members to a lower rank.</p>
+                <code>Change all 1</code>
+                <p>Set all eligible members to Member after reviewing the changes.</p>
               </div>
               <div className="rule-divider" />
               <p>

@@ -7,8 +7,8 @@ It lives in `community-ranking/`; the existing warning panel remains separate.
 ## Commands
 
 - `Check Roles ExactUsername` — show every assigned community role, its name, rank, and ID.
-- `Promote ExactUsername 7` / `Demote ExactUsername 1` — move to a rank or full role ID.
-- `Promote all 7` / `Demote all 1` — review eligible members, then apply a saved batch.
+- `Change ExactUsername 7` — set one member to a rank or full role ID, higher or lower.
+- `Change all 1` — review eligible members, then set them to the chosen role.
 - **Save Rank Datastore** / `SaveRank` — Owner only; save every current member's complete role set.
 - `RestoreRank` — Owner only; review and restore the latest completed save.
 
@@ -116,6 +116,20 @@ requires the selected role and no other non-base role, including unknown role
 paths missing from the current catalog. An unconfirmed result explicitly says
 the change may already have applied. Check Roles before issuing another change;
 previous command-history entries retain their original results.
+
+`Change all 1` and named changes to Member remove all extra roles directly.
+The base Member role is implicit; it must never be sent to `assignRole` or
+`unassignRole`. Verification still requires the member to exist and all extra
+roles to be gone. Tests simulate Roblox rejecting base-role assignment with HTTP
+400, then verify multi-role demotions and unchanged ordinary Members. Failed
+members from an earlier command need a fresh preview; old failures are not
+silently retried.
+
+Run `supabase/change-command.sql` when deploying the unified Change command.
+Previously recorded Promote/Demote commands retain their original spelling and
+direction checks for compatibility. New controls and examples use Change. Exact
+matches are skipped, but members with additional roles still have those extras
+removed to match the selected destination.
 
 ## GitHub Pages deployment
 
