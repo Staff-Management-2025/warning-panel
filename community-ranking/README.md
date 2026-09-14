@@ -7,15 +7,26 @@ It lives in `community-ranking/`; the existing warning panel remains separate.
 ## Commands
 
 - `Check Roles ExactUsername` — show every assigned community role, its name, rank, and ID.
-- `Change ExactUsername 7` — set one member to a rank or full role ID, higher or lower.
-- `Change all 1` — review eligible members, then set them to the chosen role.
+- `AddRole ExactUsername 7` — add a role by rank or full role ID, keeping every other role.
+- `RemoveRole ExactUsername 7` — remove only the specified role.
+- `RemoveRole ExactUsername all` — remove every additional role, leaving the person a Member.
+- `AddRole all 7` / `RemoveRole all 7` — apply that operation to all eligible members after review.
+- `RemoveRole all all` — review clearing every additional role from eligible members.
 - **Save Rank Datastore** / `SaveRank` — Owner only; save every current member's complete role set.
 - `RestoreRank` — Owner only; review and restore the latest completed save.
 
 All commands require a verified Admin (rank 9+) account. Operators cannot change
 themselves, peers, higher-ranked members, or assign roles at/above their own rank.
-Rank changes replace previous non-base roles with the selected role; the base
-Member role is retained. Multiple roles are displayed by Check Roles.
+Individual role commands preserve unrelated roles. The automatic Member role
+cannot be directly assigned or removed. Multiple roles are displayed by Check Roles.
+The former Change, Promote, and Demote commands cannot create new previews;
+previously reviewed jobs retain their original meaning when explicitly resumed.
+
+PeterGriffin123898 (`8550354371`) and Liamthebest10001 (`7468655528`) are
+protected from every rank-changing command, including bulk changes, restored
+snapshots, and previously queued jobs. Their roles can still be read and saved.
+Protection uses Roblox user IDs, not mutable usernames. Permission errors that
+name the API account identify the operator, not necessarily the target member.
 
 ## Authentication and secrets
 

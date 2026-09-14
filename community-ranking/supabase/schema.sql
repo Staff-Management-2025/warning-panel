@@ -18,7 +18,7 @@ create table public.ranking_jobs (
   actor_id text not null references public.ranking_accounts(site_user_id),
   actor_roblox_id text not null,
   command text not null,
-  action text not null check (action in ('promote','demote','kick','ban')),
+  action text not null check (action in ('addrole','removerole','change','promote','demote','kick','ban','restore')),
   target_role_id text,
   target_role_name text,
   is_bulk boolean not null default false,

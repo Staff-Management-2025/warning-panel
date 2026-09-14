@@ -14,6 +14,8 @@ import {
   profile,
   searchMembers,
   setRole,
+  individualRolePlan,
+  editIndividualRole,
   restoreRoleSet,
   type Membership,
 } from "./roblox-server.ts";
@@ -23,6 +25,7 @@ import {
   parseCommand,
   resolveRole,
   requireOwner,
+  protectedTargetName,
 } from "./command-rules.ts";
 import { captureRanks, planRestore, restoreAllowed, sameRoleSet, type RankSnapshot } from "./rank-backups.ts";
 import { initialRoles, type Job, type RankSaveSummary } from "./ranking-types.ts";
@@ -66,7 +69,7 @@ const safeJob = (job: SavedJob): Job => ({
   skipped: job.skipped,
   created_at: job.created_at,
   error: job.error || job.items?.find((item) => item.error)?.error,
-  changes: job.action === "restore" && job.status === "preview"
+  changes: ["restore", "addrole", "removerole"].includes(job.action) && job.status === "preview"
     ? job.items.map((item) => ({ userId: item.userId, before: item.beforeNames || [], after: item.afterNames || [] }))
     : undefined,
 });
@@ -131,10 +134,13 @@ export async function POST(request: Request) {
     if (body.action === "preview") {
       const raw = String(body.command || "").trim();
       const command = parseCommand(raw);
+      if (["change", "promote", "demote"].includes(command.action))
+        throw new Error("Use AddRole to keep existing roles, or RemoveRole to remove selected roles. RemoveRole username all removes every additional role.");
       if (command.action === "save" || command.action === "restore")
         requireOwner(staff.id, staff.rank);
       const roles = await getRoles(true);
-      const role = command.roleToken
+      const removeAll = command.action === "removerole" && command.roleToken === "all";
+      const role = command.roleToken && !removeAll
         ? resolveRole(roles, command.roleToken)
         : undefined;
       authorizeCommand(command, staff.rank, role, staff.id);
@@ -180,7 +186,7 @@ export async function POST(request: Request) {
           },
         });
       }
-      if (role) {
+      if (role || removeAll) {
         const connection = await connectionStatus();
         if (!connection.writeScope)
           throw new Error(
@@ -192,6 +198,8 @@ export async function POST(request: Request) {
       if (command.all) candidates = await allMemberships();
       else {
         const user = await exactUser(command.target);
+        const protectedName = protectedTargetName(String(user.id));
+        if (protectedName) throw new Error(`@${protectedName} is protected from rank changes.`);
         const member = await membership(String(user.id));
         if (!member)
           throw new Error("That user is not a member of this community.");
@@ -201,20 +209,28 @@ export async function POST(request: Request) {
       for (const member of candidates) {
         const userId = member.user.split("/").pop()!;
         const rank = assignedRoles(member, roles)[0]?.rank || 0;
-        // Changing a rank can move either way. Skip only the exact desired role
-        // set, so an extra higher role is still removed when needed.
-        if (role && sameRoleSet(membershipRolePaths(member), [`groups/526651322/roles/${role.id}`], roles))
-          continue;
-        if (eligibleTarget(command, staff.id, staff.rank, userId, rank, role))
-          items.push({
-            userId,
-            originalRoles: membershipRolePaths(member),
-            status: "pending",
-          });
+        if (!eligibleTarget(command, staff.id, staff.rank, userId, rank, role) || (!role && !removeAll)) continue;
+        const originalRoles = membershipRolePaths(member);
+        const individual = command.action === "addrole" || command.action === "removerole";
+        // Unknown current roles cannot be safely authorized using their rank.
+        if (originalRoles.some((path) => !roles.some((entry) => path === `groups/526651322/roles/${entry.id}`))) continue;
+        const baseRole = roles.find((entry) => entry.isBase);
+        if (removeAll && !baseRole) throw new Error("The automatic Member role is unavailable.");
+        const desiredRoles = removeAll
+          ? [`groups/526651322/roles/${baseRole!.id}`]
+          : individual
+            ? individualRolePlan(originalRoles, role!, roles, command.action as "addrole" | "removerole")
+            : [`groups/526651322/roles/${role!.id}`];
+        if (sameRoleSet(originalRoles, desiredRoles, roles)) continue;
+        const names = (paths: string[]) => paths.map((path) => roles.find((entry) => path.endsWith(`/${entry.id}`))!.name);
+        items.push({
+          userId, originalRoles, desiredRoles, status: "pending",
+          beforeNames: names(originalRoles), afterNames: names(desiredRoles),
+        });
       }
       if (!items.length)
         throw new Error(
-          "No eligible changes. Members may already have that role, or their rank is protected. You cannot change yourself or members at or above your rank.",
+          "No eligible changes. The requested role may already be present or absent, or the member is protected. You cannot change yourself or members at or above your rank.",
         );
       const job = await database<SavedJob>("createJob", {
         siteUserId,
@@ -223,7 +239,7 @@ export async function POST(request: Request) {
           command: raw,
           action: command.action,
           target_role_id: role?.id,
-          target_role_name: role?.name,
+          target_role_name: removeAll ? "All additional roles" : role?.name,
           is_bulk: command.all,
           items,
           total: items.length,
@@ -264,6 +280,14 @@ export async function POST(request: Request) {
         for (const item of job.items) {
           if (!["pending", "processing"].includes(item.status)) continue;
           if (++count > 3) break;
+          // Apply the protection to jobs reviewed before it was introduced too.
+          const protectedName = protectedTargetName(item.userId);
+          if (protectedName) {
+            item.status = "failed";
+            item.error = `@${protectedName} is protected. No rank change was attempted.`;
+            await database("saveJob", { siteUserId, jobId, lease, items: job.items, release: false });
+            continue;
+          }
           // Recheck the operator and target immediately before every write.
           const currentStaff = await staffAccount(siteUserId);
           const currentRoles = await getRoles(true);
@@ -275,6 +299,8 @@ export async function POST(request: Request) {
           const held = assignedRoles(member, currentRoles);
           const recovered = item.status === "processing";
           const restoring = command.action === "restore";
+          const individual = command.action === "addrole" || command.action === "removerole";
+          const removeAll = command.action === "removerole" && command.roleToken === "all";
           const desiredRoles = item.desiredRoles || [];
           const canRestore = restoring && member && restoreAllowed(
             item.userId, currentStaff.id, membershipRolePaths(member), desiredRoles, currentRoles,
@@ -284,6 +310,12 @@ export async function POST(request: Request) {
               canRestore && sameRoleSet(membershipRolePaths(member), desiredRoles, currentRoles)
             ) item.status = "completed";
             else if (
+              individual && (currentRole || removeAll) && member &&
+              eligibleTarget(command, currentStaff.id, currentStaff.rank, item.userId, held[0]?.rank || 0, currentRole) &&
+              sameRoleSet(membershipRolePaths(member), desiredRoles, currentRoles)
+            ) item.status = "completed";
+            else if (
+              !individual && !restoring && member &&
               currentRole &&
               held.some((r) => r.id === currentRole.id) &&
               held.every((r) => r.isBase || r.id === currentRole.id)
@@ -331,6 +363,13 @@ export async function POST(request: Request) {
             });
             try {
               if (restoring) await restoreRoleSet(member, desiredRoles, currentRoles);
+              else if (removeAll) {
+                const baseRole = currentRoles.find((entry) => entry.isBase);
+                if (!baseRole) throw new Error("The automatic Member role is unavailable.");
+                await restoreRoleSet(member, [`groups/526651322/roles/${baseRole.id}`], currentRoles);
+              }
+              else if (currentRole && individual)
+                await editIndividualRole(member, currentRole, currentRoles, command.action as "addrole" | "removerole");
               else if (currentRole) await setRole(member, currentRole, currentRoles);
               else throw new Error("This command is not available.");
               item.status = "completed";

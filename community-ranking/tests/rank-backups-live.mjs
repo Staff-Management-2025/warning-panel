@@ -12,7 +12,7 @@ assert.equal(state.staff, null);
 assert.deepEqual(state.jobs, []);
 assert.equal(state.rankSave, undefined);
 
-for (const command of ["SaveRank", "RestoreRank"]) {
+for (const command of ["SaveRank", "RestoreRank", "AddRole ExampleUser 7", "RemoveRole all all"]) {
   for (const token of ["", "a".repeat(64)]) {
     const response = await fetch(endpoint, { method: "POST", headers: {
       Origin: origin, "Content-Type": "application/json",
@@ -21,4 +21,4 @@ for (const command of ["SaveRank", "RestoreRank"]) {
     assert.equal(response.status, 401);
   }
 }
-console.log("PASS: public site is available; anonymous and forged sessions cannot save or restore ranks. No live ranks changed.");
+console.log("PASS: public site is available; anonymous and forged sessions cannot save, restore, add, or remove roles. No live ranks changed.");

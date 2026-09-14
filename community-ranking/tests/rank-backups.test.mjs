@@ -18,6 +18,7 @@ const robloxUrl = moduleUrl("../lib/roblox-server.ts", {
 const backupsUrl = moduleUrl("../lib/rank-backups.ts", {
   'import { GROUP_ID } from "./server-config";': 'const GROUP_ID="526651322";',
   '"./roblox-server"': JSON.stringify(robloxUrl),
+  '"./command-rules"': JSON.stringify(rulesUrl),
 });
 const rules = await import(rulesUrl);
 const roblox = await import(robloxUrl);
@@ -110,6 +111,93 @@ const routeUrl = moduleUrl("../app/api/console/route.ts", {
 const route = await import(routeUrl);
 const request = (body) => new Request("https://test.invalid/api/console", {
   method: "POST", headers: { Origin: "https://test.invalid", "Content-Type": "application/json" }, body: JSON.stringify(body),
+});
+
+test("individual execution preserves other roles, clears extras, and reconciles without replay", async () => {
+  const originalFetch = globalThis.fetch;
+  let current = member("201", [admin]);
+  let job;
+  const writes = [];
+  globalThis.backupFixture = { staff: { id: owner, rank: 255 }, database: async (action, payload) => {
+    if (action === "createJob") return job = { id: crypto.randomUUID(), status: "preview", ...payload.job };
+    if (action === "job" || action === "claimJob") return structuredClone(job);
+    assert.equal(action, "saveJob");
+    job.items = structuredClone(payload.items);
+    job.completed = job.items.filter((item) => item.status === "completed").length;
+    job.failed = job.items.filter((item) => item.status === "failed").length;
+    job.status = job.completed + job.failed === job.total ? (job.failed ? "partial" : "completed") : "running";
+    return structuredClone(job);
+  } };
+  globalThis.fetch = async (url, init) => {
+    if (url.includes("/roles?")) return Response.json({ groupRoles: roles.map((role) => ({ ...role, displayName: role.name })) });
+    if (url.endsWith("/introspect")) return Response.json({ enabled: true, scopes: [{ name: "group", operations: ["read", "write"] }] });
+    if (url.endsWith("/usernames/users")) return Response.json({ data: [{ id: 201, name: "ExampleUser", displayName: "Example" }] });
+    if (init.method === "POST") {
+      assert.equal(job.items[0].status, "processing");
+      const selected = JSON.parse(init.body).role;
+      writes.push({ operation: url.split(":").pop(), selected });
+      current.roles = url.endsWith(":assignRole") ? [...current.roles, selected] : current.roles.filter((role) => role !== selected);
+      return Response.json({});
+    }
+    return Response.json({ groupMemberships: [{ ...current, role: path(base) }] });
+  };
+  const preview = async (command) => {
+    const response = await route.POST(request({ action: "preview", command }));
+    const body = await response.json();
+    assert.equal(response.status, 200, body.error);
+    return body.job;
+  };
+  const execute = async () => {
+    const response = await route.POST(request({ action: "execute", jobId: job.id }));
+    const body = await response.json();
+    assert.equal(response.status, 200, body.error);
+    return body.job;
+  };
+  try {
+    let review = await preview("AddRole ExampleUser 7");
+    assert.deepEqual(review.changes[0].before, ["Admin"]);
+    assert.deepEqual(review.changes[0].after, ["Moderator", "Admin"]);
+    assert.equal(writes.length, 0);
+    assert.equal((await execute()).completed, 1);
+    assert.deepEqual(current.roles, [path(admin), path(mod)]);
+    assert.equal(writes.length, 1);
+
+    await preview("RemoveRole ExampleUser 7");
+    assert.equal((await execute()).completed, 1);
+    assert.deepEqual(current.roles, [path(admin)]);
+    assert.equal(writes.length, 2);
+
+    current = member("201", [admin, mod]);
+    await preview("RemoveRole ExampleUser all");
+    assert.equal((await execute()).completed, 1);
+    assert.deepEqual(current.roles, []);
+    assert.equal(writes.length, 4);
+    assert.ok(writes.every((write) => write.selected !== path(base)));
+
+    for (const [command, original, actual] of [
+      ["AddRole ExampleUser 7", [admin], [mod, admin]],
+      ["RemoveRole ExampleUser 7", [mod, admin], [admin]],
+      ["RemoveRole ExampleUser all", [mod, admin], []],
+    ]) {
+      current = member("201", original);
+      await preview(command);
+      job.items[0].status = "processing";
+      current = member("201", actual);
+      assert.equal((await execute()).completed, 1);
+    }
+    assert.equal(writes.length, 4, "Interrupted, confirmed changes never repeat a mutation.");
+
+    current = member("201", [admin]);
+    await preview("AddRole ExampleUser 7");
+    current = member("201", [base]);
+    assert.equal((await execute()).failed, 1, "A changed preview cannot overwrite current roles.");
+    current = member("201", [admin]);
+    await preview("AddRole ExampleUser 7");
+    job.items[0].status = "processing";
+    current = member("201", [mod]);
+    assert.equal((await execute()).failed, 1, "Recovery checks unrelated roles were preserved too.");
+    assert.equal(writes.length, 4);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("HTTP save/restore and resumed restores reject non-owners before touching stored data", async () => {
@@ -225,7 +313,7 @@ test("restore execution verifies writes, refuses changed previews, and reconcile
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("Change all reviews upward and downward changes together and excludes exact matches", async () => {
+test("AddRole and RemoveRole previews preserve unrelated roles and exclude no-ops", async () => {
   const originalFetch = globalThis.fetch;
   const current = [member(owner, [ownerRole]), member("201", [base]), member("202", [mod, admin]), member("203", [mod])];
   let stored;
@@ -240,13 +328,71 @@ test("Change all reviews upward and downward changes together and excludes exact
     return Response.json({ groupMemberships: current });
   };
   try {
-    let response = await route.POST(request({ action: "preview", command: "Change all 7" }));
+    let response = await route.POST(request({ action: "preview", command: "AddRole all 7" }));
     assert.equal(response.status, 200);
-    assert.equal(stored.action, "change");
-    assert.deepEqual(stored.items.map((i) => i.userId), ["201", "202"]);
-    assert.equal(stored.skipped, 2);
-    response = await route.POST(request({ action: "preview", command: "Change all 1" }));
+    assert.equal(stored.action, "addrole");
+    assert.deepEqual(stored.items.map((i) => i.userId), ["201"]);
+    assert.equal(stored.skipped, 3);
+    response = await route.POST(request({ action: "preview", command: "RemoveRole all 7" }));
     assert.equal(response.status, 200);
     assert.deepEqual(stored.items.map((i) => i.userId), ["202", "203"]);
+    assert.deepEqual(stored.items[0].desiredRoles, [path(admin)]);
+    assert.deepEqual(stored.items[1].desiredRoles, [path(base)]);
+    response = await route.POST(request({ action: "preview", command: "RemoveRole all all" }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(stored.items.map((i) => i.userId), ["202", "203"]);
+    assert.ok(stored.items.every((i) => i.desiredRoles.length === 1 && i.desiredRoles[0] === path(base)));
+    response = await route.POST(request({ action: "preview", command: "Change all 1" }));
+    assert.equal(response.status, 400, "Old replacement commands cannot create new previews.");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("backups retain protected accounts, but restore plans exclude both even at low ranks", () => {
+  const protectedIds = [owner, "8550354371"];
+  const saved = snapshot([...protectedIds.map((id) => member(id, [mod])), member("201", [mod])]);
+  assert.equal(saved.members.length, 3);
+  const current = [...protectedIds.map((id) => member(id, [base])), member("201", [base])];
+  const plan = backups.planRestore(saved, current, roles, "999");
+  assert.deepEqual(plan.items.map((item) => item.userId), ["201"]);
+  assert.equal(plan.unavailable, 2);
+});
+
+test("protected accounts are omitted from bulk reviews and blocked in old queued changes and restores", async () => {
+  const originalFetch = globalThis.fetch;
+  const protectedIds = [owner, "8550354371"];
+  const current = [...protectedIds.map((id) => member(id, [admin])), member("201", [mod])];
+  let job;
+  const writes = [];
+  globalThis.backupFixture = { staff: { id: owner, rank: 255 }, database: async (action, payload) => {
+    if (action === "createJob") return job = { id: crypto.randomUUID(), status: "preview", ...payload.job };
+    if (action === "job" || action === "claimJob") return structuredClone(job);
+    assert.equal(action, "saveJob");
+    job.items = structuredClone(payload.items);
+    job.failed = job.items.filter((item) => item.status === "failed").length;
+    job.completed = 0;
+    job.status = job.failed === job.total ? "partial" : "running";
+    return structuredClone(job);
+  } };
+  globalThis.fetch = async (url, init) => {
+    if (url.endsWith("/introspect")) return Response.json({ enabled: true, scopes: [{ name: "group", operations: ["read", "write"] }] });
+    if (init.method === "POST") writes.push(url);
+    if (url.includes("/roles?")) return Response.json({ groupRoles: roles.map((role) => ({ ...role, displayName: role.name })) });
+    return Response.json({ groupMemberships: current });
+  };
+  try {
+    let response = await route.POST(request({ action: "preview", command: "RemoveRole all all" }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(job.items.map((item) => item.userId), ["201"]);
+    for (const command of ["Change all 1", "RestoreRank"]) {
+      job = { id: crypto.randomUUID(), command, status: "running", total: 2,
+        ...(command === "RestoreRank" ? {} : { target_role_id: base.id }),
+        items: protectedIds.map((userId, index) => ({ userId, originalRoles: [path(admin)],
+          desiredRoles: [path(base)], status: index ? "processing" : "pending" })) };
+      response = await route.POST(request({ action: "execute", jobId: job.id }));
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).job.failed, 2);
+      assert.ok(job.items.every((item) => /protected/.test(item.error)));
+    }
+    assert.deepEqual(writes, [], "Protected accounts must never receive a Roblox role write.");
   } finally { globalThis.fetch = originalFetch; }
 });

@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ArrowUpDown,
+  Plus,
+  Minus,
   Check,
   ChevronRight,
   Copy,
@@ -29,6 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Progress } from "@/components/ui/progress";
+import { commandUsername, completeUsername } from "@/lib/command-input";
 import {
   initialRoles,
   type Job,
@@ -92,12 +94,14 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
     roles: Role[];
   } | null>(null);
   const [suggestions, setSuggestions] = useState<Staff[]>([]);
+  const [suggestionStatus, setSuggestionStatus] = useState("");
   const [copied, setCopied] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const halted = useRef(false);
   const canCommand =
     signedIn && state.ready && state.staff && state.staff.rank >= 9;
   const working = Boolean(busy);
+  const suggestionQuery = commandUsername(command);
 
   const refresh = useCallback(async () => {
     try {
@@ -123,35 +127,40 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
     };
   }, []);
   useEffect(() => {
-    const match =
-      /^(?:change|check\s+roles)\s+([A-Za-z0-9_]{2,20})$/i.exec(
-        command,
-      );
-    if (!canCommand || !match || match[1].toLowerCase() === "all") {
+    setSuggestions([]);
+    setSuggestionStatus("");
+    if (!canCommand || !suggestionQuery || working) {
       setSuggestions([]);
       return;
     }
     const abort = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        if (client) setSuggestions((await client.suggest(match[1], abort.signal)).members);
+        setSuggestionStatus("Finding community members…");
+        let members: Staff[];
+        if (client) members = (await client.suggest(suggestionQuery, abort.signal)).members;
         else {
           const res = await fetch(
-            `/api/console?q=${encodeURIComponent(match[1])}`,
+            `/api/console?q=${encodeURIComponent(suggestionQuery)}`,
             { signal: abort.signal },
           );
-          const data = (await res.json()) as { members: Staff[] };
-          if (res.ok) setSuggestions(data.members);
+          const data = (await res.json()) as { members: Staff[]; error?: string };
+          if (!res.ok) throw new Error(data.error || "Could not load username suggestions.");
+          members = data.members;
         }
-      } catch {
-        /* A changed query cancels its earlier suggestion request. */
+        if (!abort.signal.aborted) {
+          setSuggestions(members);
+          setSuggestionStatus(members.length ? "" : "No community usernames match yet.");
+        }
+      } catch (error) {
+        if (!abort.signal.aborted) setSuggestionStatus((error as Error).message);
       }
     }, 250);
     return () => {
       clearTimeout(timer);
       abort.abort();
     };
-  }, [command, canCommand, client]);
+  }, [suggestionQuery, canCommand, client, working]);
 
   async function verify(stage: string) {
     setBusy(stage);
@@ -354,9 +363,9 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                             onClick={() =>
                               fill(
                                 command.trim()
-                                  ? command.trim().replace(/\s+\d+$/, "") +
+                                  ? command.trim().replace(/(\s+[A-Za-z0-9_]+)\s+(?:\d+|all)$/i, "$1") +
                                       ` ${role.id}`
-                                  : `Change username ${role.id}`,
+                                  : `AddRole username ${role.id}`,
                               )
                             }
                           >
@@ -385,6 +394,7 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                 <Terminal size={18} className="muted-icon" />
               </div>
               <div className="command-body">
+                {suggestionStatus && <p className="small-note" role="status">{suggestionStatus}</p>}
                 {suggestions.length > 0 && (
                   <div
                     className="suggestions"
@@ -395,7 +405,7 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                       <button
                         key={member.id}
                         onClick={() => {
-                          fill(command.replace(/\S+$/, member.username) + " ");
+                          fill(completeUsername(command, member.username));
                           setSuggestions([]);
                         }}
                       >
@@ -429,7 +439,7 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                       setCommand(e.target.value);
                       setJob(null);
                     }}
-                    placeholder="Change username 7"
+                    placeholder="AddRole username 7"
                     aria-label="Ranking command"
                     maxLength={240}
                     autoComplete="off"
@@ -452,8 +462,11 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                 </form>
                 <div className="command-examples">
                   {[
-                    ["Change", "Change username 7", ArrowUpDown],
-                    ["Change all", "Change all 1", Users],
+                    ["Add role", "AddRole username 7", Plus],
+                    ["Remove role", "RemoveRole username 7", Minus],
+                    ["Add to all", "AddRole all 7", Users],
+                    ["Remove from all", "RemoveRole all 7", Users],
+                    ["Remove every role", "RemoveRole username all", Minus],
                   ].map(([label, example, Icon]) => {
                     const Symbol = Icon as typeof Users;
                     return (
@@ -567,7 +580,7 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                       {job.target_role_name ? (
                         <>
                           {" "}
-                          → <strong>{job.target_role_name}</strong>
+                          {job.action === "addrole" ? "+ " : job.action === "removerole" ? "− " : "→ "}<strong>{job.target_role_name}</strong>
                         </>
                       ) : (
                         ""
@@ -576,9 +589,13 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                       {job.skipped > 0 &&
                         `${job.skipped} excluded or unchanged.`}
                     </p>
-                    {job.action === "restore" && job.status === "preview" && (
+                    {["restore", "addrole", "removerole"].includes(job.action) && job.status === "preview" && (
                       <>
-                        <p className="small-note">Restore every saved role for the members below. New members, departed members and protected or deleted roles are left alone.</p>
+                        <p className="small-note">{job.action === "restore"
+                          ? "Restore every saved role for the members below. New members, departed members and protected or deleted roles are left alone."
+                          : job.action === "addrole"
+                            ? "Add the selected role and keep every other role. Review each member's roles below."
+                            : "Remove only the selected role, or every additional role when you type all. The automatic Member role stays."}</p>
                         <div className="restore-changes">
                           {job.changes?.map((change) => (
                             <div key={change.userId} className="restore-change">
@@ -589,7 +606,7 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                         </div>
                       </>
                     )}
-                    {job.action !== "restore" && job.target_role_name && job.status === "preview" && (
+                    {["change", "promote", "demote"].includes(job.action) && job.target_role_name && job.status === "preview" && (
                       <p className="small-note">
                         This replaces previous non-base roles with the selected
                         role. The base Member role stays.
@@ -811,12 +828,20 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
             <section className="rules-panel">
               <p className="eyebrow">COMMAND GUIDE</p>
               <div>
-                <code>Change username 7</code>
-                <p>Set one member to a rank or role ID, higher or lower.</p>
+                <code>AddRole username 7</code>
+                <p>Add a role by rank number or role ID. Keep all existing roles.</p>
               </div>
               <div>
-                <code>Change all 1</code>
-                <p>Set all eligible members to Member after reviewing the changes.</p>
+                <code>RemoveRole username 7</code>
+                <p>Remove just that role. Keep every other role.</p>
+              </div>
+              <div>
+                <code>RemoveRole username all</code>
+                <p>Remove all additional roles. The person stays a Member.</p>
+              </div>
+              <div>
+                <code>AddRole all 7 / RemoveRole all 7</code>
+                <p>Apply the selected operation to all eligible members. RemoveRole all all clears their additional roles.</p>
               </div>
               <div className="rule-divider" />
               <p>
@@ -824,6 +849,7 @@ export default function Console({ signedIn, client }: { signedIn: boolean; clien
                 and roles below your own rank.
               </p>
               <p>Bulk changes always require a review.</p>
+              <p>PeterGriffin123898 and Liamthebest10001 are protected from all role changes.</p>
             </section>
           </aside>
         </div>

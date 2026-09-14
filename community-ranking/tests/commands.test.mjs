@@ -81,6 +81,16 @@ test("Change accepts a rank or role ID and can move either way without bypassing
   assert.throws(() => rules.parseCommand("Change all 1; Ban all"));
 });
 
+test("PeterGriffin and Liam are never eligible targets, regardless of actor or current rank", () => {
+  for (const target of ["8550354371", rules.OWNER_USER_ID]) {
+    assert.ok(rules.protectedTargetName(target));
+    for (const input of ["AddRole all 7", "RemoveRole username 7", "RemoveRole all all", "Change all 7", "Promote username 7", "Demote all 1"])
+      for (const rank of [1, 7, 14, 254])
+        assert.equal(rules.eligibleTarget(rules.parseCommand(input), "999", 255, target, rank, moderator), false);
+  }
+  assert.equal(rules.eligibleTarget(rules.parseCommand("Change all 7"), "999", 255, "200", 1, moderator), true);
+});
+
 test("Admin is required for ranking and inspection", () => {
   for (const input of [
     "Check Roles username",
@@ -349,6 +359,63 @@ test("membership reads explicitly bypass caches", async () => {
   }
 });
 
+
+test("individual commands accept role IDs and remove-all without bypassing authorization", () => {
+  for (const [input, action, target, token] of [
+    ["AddRole ExampleUser 682961014", "addrole", "ExampleUser", "682961014"],
+    ["add role all 7", "addrole", "all", "7"],
+    ["RemoveRole ExampleUser ALL", "removerole", "ExampleUser", "all"],
+    ["Remove Role all 7", "removerole", "all", "7"],
+    ["RemoveRole all all", "removerole", "all", "all"],
+  ]) {
+    const command = rules.parseCommand(input);
+    assert.equal(command.action, action);
+    assert.equal(command.target, target);
+    assert.equal(command.roleToken, token);
+    assert.equal(command.all, target === "all");
+    assert.throws(() => rules.authorizeCommand(command, 8, token === "all" ? undefined : moderator));
+    assert.equal(rules.eligibleTarget(command, "100", 9, "100", 1, moderator), false);
+    assert.equal(rules.eligibleTarget(command, "100", 9, "200", 9, moderator), false);
+  }
+  for (const input of ["AddRole all all", "Change username all", "RemoveRole username 7; AddRole all 9", "RemoveRole username", "AddRole Display Name 7"])
+    assert.throws(() => rules.parseCommand(input));
+  for (const action of ["AddRole", "RemoveRole"]) {
+    assert.throws(() => rules.authorizeCommand(rules.parseCommand(`${action} username 1`), 255, memberRole), /automatic/);
+    assert.throws(() => rules.authorizeCommand(rules.parseCommand(`${action} username 9`), 9, admin), /below/);
+  }
+});
+
+test("adding and removing one role preserve all other roles and never mutate Member", async () => {
+  const originalFetch = globalThis.fetch;
+  let current = { path: "groups/526651322/memberships/200", user: "users/200", roles: [rolePath(admin)] };
+  const writes = [];
+  globalThis.fetch = async (url, init) => {
+    if (init.method === "POST") {
+      const selected = JSON.parse(init.body).role;
+      assert.notEqual(selected, rolePath(memberRole));
+      writes.push({ operation: url.split(":").pop(), selected });
+      current.roles = url.endsWith(":assignRole") ? [...current.roles, selected] : current.roles.filter((path) => path !== selected);
+      return Response.json({});
+    }
+    return Response.json({ groupMemberships: [{ ...current, role: rolePath(memberRole) }] });
+  };
+  try {
+    await roblox.editIndividualRole(current, moderator, roles, "addrole");
+    assert.deepEqual(current.roles, [rolePath(admin), rolePath(moderator)]);
+    await roblox.editIndividualRole(current, moderator, roles, "addrole");
+    assert.equal(writes.length, 1, "An existing role is a no-op.");
+    await roblox.editIndividualRole(current, moderator, roles, "removerole");
+    assert.deepEqual(current.roles, [rolePath(admin)]);
+    await roblox.editIndividualRole(current, moderator, roles, "removerole");
+    assert.equal(writes.length, 2, "An absent role is a no-op.");
+    await roblox.editIndividualRole(current, admin, roles, "removerole");
+    assert.deepEqual(current.roles, []);
+    assert.equal(writes.length, 3);
+    for (const action of ["addrole", "removerole"])
+      await assert.rejects(() => roblox.editIndividualRole(current, memberRole, roles, action), /automatic Member/);
+    assert.equal(writes.length, 3);
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test("role permission failures name the connected account and retain HTTP status", async () => {
   const originalFetch = globalThis.fetch;

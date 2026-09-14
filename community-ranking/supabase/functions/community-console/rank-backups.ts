@@ -1,6 +1,7 @@
 import { GROUP_ID } from "./server-config.ts";
 import { membershipRolePaths, type Membership } from "./roblox-server.ts";
 import type { RankSaveSummary, Role } from "./ranking-types.ts";
+import { protectedTargetName } from "./command-rules.ts";
 
 export type SavedMember = { userId: string; roles: string[] };
 export type RankSnapshot = RankSaveSummary & { members: SavedMember[]; roles: Role[] };
@@ -47,7 +48,7 @@ export function captureRanks(members: Membership[], roles: Role[]): SavedMember[
 }
 
 export function restoreAllowed(userId: string, actorId: string, current: string[], desired: string[], roles: Role[]) {
-  if (userId === actorId) return false;
+  if (protectedTargetName(userId) || userId === actorId) return false;
   try {
     const held = validateSavedRoles(current, roles);
     const wanted = validateSavedRoles(desired, roles);

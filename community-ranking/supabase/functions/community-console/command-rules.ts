@@ -2,6 +2,16 @@ import type { Role } from "./ranking-types.ts";
 
 export const OWNER_USER_ID = "7468655528";
 
+// Protect by immutable Roblox IDs, even if either account changes its username.
+const protectedAccounts = new Map([
+  [OWNER_USER_ID, "Liamthebest10001"],
+  ["8550354371", "PeterGriffin123898"],
+]);
+
+export function protectedTargetName(userId: string): string | null {
+  return protectedAccounts.get(userId) || null;
+}
+
 export function isOwner(actorId: string, actorRank: number) {
   return actorId === OWNER_USER_ID && actorRank === 255;
 }
@@ -12,7 +22,7 @@ export function requireOwner(actorId: string, actorRank: number) {
 }
 
 export type Command = {
-  action: "change" | "promote" | "demote" | "check" | "save" | "restore";
+  action: "addrole" | "removerole" | "change" | "promote" | "demote" | "check" | "save" | "restore";
   target: string;
   all: boolean;
   roleToken?: string;
@@ -27,18 +37,18 @@ export function parseCommand(input: string): Command {
   if (check && check[1].toLowerCase() !== "all")
     return { action: "check", target: check[1], all: false };
   // Retain old spellings for previously reviewed command jobs.
-  const match = /^(change|promote|demote)\s+([A-Za-z0-9_]{3,20})\s+(\d{1,20})$/i.exec(
+  const match = /^(add\s*role|remove\s*role|change|promote|demote)\s+([A-Za-z0-9_]{3,20})\s+(\d{1,20}|all)$/i.exec(
     text,
   );
-  if (match)
+  if (match && (match[3].toLowerCase() !== "all" || /^remove\s*role$/i.test(match[1])))
     return {
-      action: match[1].toLowerCase() as Command["action"],
+      action: match[1].toLowerCase().replace(/\s/g, "") as Command["action"],
       target: match[2],
       all: match[2].toLowerCase() === "all",
-      roleToken: match[3],
+      roleToken: match[3].toLowerCase(),
     };
   throw new Error(
-    "Use Change username rank, Change all rank, or Check Roles username. Owners can also use SaveRank and RestoreRank.",
+    "Use AddRole username rank, RemoveRole username rank, or Check Roles username. Use all instead of a username for a bulk review. Owners can also use SaveRank and RestoreRank.",
   );
 }
 
@@ -63,13 +73,15 @@ export function authorizeCommand(
   role?: Role,
   actorId = "",
 ) {
-  if (!["change", "promote", "demote", "check", "save", "restore"].includes(command.action))
+  if (!["addrole", "removerole", "change", "promote", "demote", "check", "save", "restore"].includes(command.action))
     throw new Error("This command is not available.");
   if (command.action === "save" || command.action === "restore") {
     requireOwner(actorId, actorRank);
     return;
   }
   if (actorRank < 9) throw new Error("Admin rank 9 or higher is required.");
+  if ((command.action === "addrole" || command.action === "removerole") && role?.isBase)
+    throw new Error("Member is automatic and cannot be added or removed. Choose a specific additional role.");
   if (role && (role.rank <= 0 || role.rank >= 255 || role.rank >= actorRank))
     throw new Error(
       "Choose a member role below your own rank. Guest and Owner are protected.",
@@ -84,9 +96,10 @@ export function eligibleTarget(
   targetRank: number,
   role?: Role,
 ) {
-  if (targetId === actorId || targetRank >= actorRank || targetRank <= 0)
+  if (protectedTargetName(targetId) || targetId === actorId || targetRank >= actorRank || targetRank <= 0)
     return false;
-  if (command.action === "change") return Boolean(role);
+  if (command.action === "removerole" && command.roleToken === "all") return true;
+  if (["addrole", "removerole", "change"].includes(command.action)) return Boolean(role);
   if (command.action === "promote")
     return Boolean(role && targetRank < role.rank);
   if (command.action === "demote")

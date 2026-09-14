@@ -277,45 +277,90 @@ export async function searchMembers(query: string) {
   }));
 }
 
+async function writeMembershipRole(
+  member: Membership,
+  operation: "assignRole" | "unassignRole",
+  target: string,
+) {
+  try {
+    await cloud(`${member.path}:${operation}`, {
+      method: "POST",
+      body: JSON.stringify({ role: target }),
+    });
+  } catch (error) {
+    if (error instanceof RobloxApiError && error.status === 403) {
+      const connection = await connectionStatus();
+      const account = connection.username ? `@${connection.username}` : "the connected account";
+      throw new RobloxApiError(403, connection.writeScope
+        ? `Roblox refused ${operation === "assignRole" ? "to assign" : "to remove"} the selected role using API account ${account}. This identifies the operator, not the target member. The operator needs Assign or remove roles from members permission and authority above this role. Check Roles before retrying.`
+        : `Roblox refused the role change using API account ${account}. ${connection.error || "Enable group:write for its API key."}`);
+    }
+    throw error;
+  }
+}
+
+export function individualRolePlan(
+  original: string[],
+  role: Role,
+  roles: Role[],
+  action: "addrole" | "removerole",
+) {
+  if (role.isBase || role.rank <= 0 || role.rank >= 255)
+    throw new Error("Choose an additional member role. The automatic Member role cannot be added or removed.");
+  const catalog = new Set(roles.map((entry) => `groups/${GROUP_ID}/roles/${entry.id}`));
+  if (!original.length || original.some((path) => !catalog.has(path)))
+    throw new Error("A current role is unavailable. Check Roles and review again.");
+  const selected = `groups/${GROUP_ID}/roles/${role.id}`;
+  const result = new Set(original);
+  if (action === "addrole") result.add(selected);
+  else result.delete(selected);
+  // Removing the final additional role leaves the automatic Member role.
+  if (!result.size) {
+    const base = roles.find((entry) => entry.isBase);
+    if (!base) throw new Error("The automatic Member role is unavailable.");
+    result.add(`groups/${GROUP_ID}/roles/${base.id}`);
+  }
+  return [...result].sort();
+}
+
+export async function editIndividualRole(
+  member: Membership,
+  role: Role,
+  roles: Role[],
+  action: "addrole" | "removerole",
+) {
+  const original = membershipRolePaths(member);
+  const desired = individualRolePlan(original, role, roles, action);
+  const selected = `groups/${GROUP_ID}/roles/${role.id}`;
+  const hasRole = original.includes(selected);
+  if ((action === "addrole" && hasRole) || (action === "removerole" && !hasRole)) return;
+
+  // Exactly one mutation: never replace or remove another assigned role.
+  await writeMembershipRole(member, action === "addrole" ? "assignRole" : "unassignRole", selected);
+  const bases = new Set(roles.filter((entry) => entry.isBase).map((entry) => `groups/${GROUP_ID}/roles/${entry.id}`));
+  const normalized = (paths: string[]) => [...new Set(paths)].filter((path) => !bases.has(path)).sort().join("|");
+  for (const delay of [0, 250, 500, 1000, 2000, 3000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    const actual = await membership(member.user.split("/").pop()!);
+    if (actual && normalized(membershipRolePaths(actual)) === normalized(desired)) return;
+  }
+  throw new Error("Roblox did not confirm the complete role list. The selected role may already have changed. Use Check Roles before retrying.");
+}
+
 export async function setRole(member: Membership, role: Role, roles: Role[]) {
   const desired = `groups/${GROUP_ID}/roles/${role.id}`;
   // Member is implicit and cannot be assigned like an extra role. Returning to
   // Member means removing all non-base roles, while keeping the membership.
   // Other destinations are assigned before old roles are removed.
-  const change = async (
-    operation: "assignRole" | "unassignRole",
-    target: string,
-  ) => {
-    try {
-      await cloud(`${member.path}:${operation}`, {
-        method: "POST",
-        body: JSON.stringify({ role: target }),
-      });
-    } catch (error) {
-      if (error instanceof RobloxApiError && error.status === 403) {
-        const connection = await connectionStatus();
-        const account = connection.username
-          ? `@${connection.username}`
-          : "the connected Roblox account";
-        throw new RobloxApiError(
-          403,
-          connection.writeScope
-            ? `Roblox refused ${operation === "assignRole" ? "to assign" : "to remove"} this role for ${account}. The key has group:write, but the account needs Assign or remove roles from members permission and authority above this role. A role named Owner does not make an account the community owner. Check Roles before retrying.`
-            : `Roblox refused the role change for ${account}. ${connection.error || "Enable group:write for its API key."}`,
-        );
-      }
-      throw error;
-    }
-  };
   if (!role.isBase && !membershipRolePaths(member).includes(desired))
-    await change("assignRole", desired);
+    await writeMembershipRole(member, "assignRole", desired);
   for (const old of membershipRolePaths(member)) {
     if (
       old === desired ||
       roles.some((item) => item.isBase && old.endsWith(`/${item.id}`))
     )
       continue;
-    await change("unassignRole", old);
+    await writeMembershipRole(member, "unassignRole", old);
   }
   // Roblox's membership reads can lag behind successful role writes. Retry
   // only the confirmation reads, never the assign/unassign operations.
@@ -349,11 +394,11 @@ export async function restoreRoleSet(member: Membership, desired: string[], role
   // Preserve all saved roles, not just the member's highest rank.
   for (const path of wanted) {
     if (catalog.get(path)!.isBase || original.includes(path)) continue;
-    await cloud(`${member.path}:assignRole`, { method: "POST", body: JSON.stringify({ role: path }) });
+    await writeMembershipRole(member, "assignRole", path);
   }
   for (const path of original) {
     if (catalog.get(path)!.isBase || wanted.has(path)) continue;
-    await cloud(`${member.path}:unassignRole`, { method: "POST", body: JSON.stringify({ role: path }) });
+    await writeMembershipRole(member, "unassignRole", path);
   }
   const normalize = (paths: string[]) => [...new Set(paths)]
     .filter((path) => !catalog.get(path)?.isBase).sort().join("|");
