@@ -1,7 +1,8 @@
 # Authority Community Ranking
 
-Staff console for Roblox community **526651322**. This independent app lives in
-`community-ranking/`; the repository's existing warning panel remains separate.
+Staff console for Roblox community **526651322**. The public interface is hosted
+at `https://staff-management-2025.github.io/warning-panel/community-ranking/`.
+It lives in `community-ranking/`; the existing warning panel remains separate.
 
 ## Commands
 
@@ -18,13 +19,27 @@ Member role is retained. Multiple roles are displayed by Check Roles.
 
 ## Authentication and secrets
 
-Sites authenticates the visitor. A random, expiring code in the Roblox profile
-About description proves account ownership. Supabase stores the resulting unique
-account link. Every write rechecks the operator's live community rank.
+No ChatGPT or Supabase user account is required. A random, expiring code in the
+Roblox profile About description proves account ownership. A separate private
+challenge token binds verification to the browser that requested it; the public
+profile code alone cannot sign someone in. Supabase atomically consumes each
+challenge and issues an eight-hour opaque session, stored only in this browser
+tab. Only token hashes are stored in the database. Sign-out revokes the session.
+Every command rechecks the operator's live community rank. Existing account links
+and command history are retained when staff first verify on GitHub Pages.
 
-Configure server-only `ROBLOX_API_KEY` and `RANKING_BRIDGE_TOKEN` using the hosting
-secret manager. Local development reads ignored `.env`; use `.env.example` as a
-template. Do not put credentials into Git, browser bundles, or public variables.
+The `community-console` Edge Function implements authentication, per-session and
+verification rate limits, origin checks, and command authorization. Its gateway
+JWT check is disabled because it validates its own opaque sessions, rather than
+using Supabase Auth. Database tables and privileged RPC functions are closed to
+both anonymous and authenticated browser roles. The service key never enters the
+browser. The original `ranking-store` function remains a private server bridge.
+
+The Edge Function reads `AUTHORITY_ROBLOX_API_KEY` and
+`AUTHORITY_RANKING_BRIDGE_TOKEN` from encrypted Supabase Vault via a service-only
+RPC. Local checks use ignored `.env`; use `.env.example` as a template. Never put
+credentials into Git, browser bundles, or public variables. The legacy Sites
+deployment uses its own server secret manager.
 
 The Supabase Edge Function uses custom constant-time token verification; its
 committed SHA-256 fingerprint is not the token. Database tables have RLS enabled,
@@ -47,6 +62,7 @@ npm run install:ci
 npm run dev
 npm test
 npm run build
+npm run build:pages
 ```
 
 With server credentials configured, the optional read-only integration check is:
@@ -61,12 +77,16 @@ The development sign-in is a Sites preview fixture and is not a staff account.
 
 ## Maintainer map
 
-- `app/ranking-console.tsx`, `app/console.css`: responsive interface.
+- `app/ranking-console.tsx`, `app/console.css`: shared responsive interface.
+- `pages/`: GitHub Pages entry point and opaque-session client.
 - `app/api/console/route.ts`: identity checks, role inspection, command review and execution.
 - `lib/command-rules.ts`: command parsing and hierarchy rules.
 - `lib/roblox-server.ts`: Roblox requests and multi-role replacement.
 - `supabase/schema.sql`: database schema snapshot.
 - `supabase/functions/ranking-store/`: server-only database bridge.
+- `supabase/browser-auth.sql`: profile challenges, sessions, rate limits and grants.
+- `supabase/functions/community-console/`: public Edge Function with server-enforced authentication.
+- `scripts/prepare-pages-backend.mjs`: synchronizes the shared rules and command handler into the Edge Function.
 - `tests/`: permission, parsing, multi-role, and read-only integration checks.
 
 Bulk jobs process three members per request, use an exclusive expiring lease,
@@ -102,3 +122,18 @@ requires the selected role and no other non-base role, including unknown role
 paths missing from the current catalog. An unconfirmed result explicitly says
 the change may already have applied. Check Roles before issuing another change;
 previous command-history entries retain their original results.
+
+## GitHub Pages deployment
+
+Run `npm run build:pages`, then deploy `supabase/functions/community-console/`
+with its custom session authentication (`verify_jwt=false`). Publish the contents
+of `.pages-dist/` into the repository's `community-ranking/` directory, keeping
+the existing root warning panel intact. The files use relative asset paths.
+The frontend origin is restricted to `https://staff-management-2025.github.io`.
+Never copy `.env`, local runtime files, or database secrets into the public site.
+
+Roblox can return `roles: []` alongside a valid singular `role` for ordinary
+Members. All role inspection, command previews, permission checks, and change
+verification use `membershipRolePaths()` to normalize this response. Empty extra
+roles do not mean the user is a Guest. This case was reproduced with the read-only
+lookup of AdrianAspher; no rank change is needed to verify membership eligibility.

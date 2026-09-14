@@ -1,6 +1,6 @@
-import { getChatGPTUser } from "@/app/chatgpt-auth";
-import { configured, database } from "@/lib/server-config";
-import { staffAccount, membershipRoles } from "@/lib/server-service";
+import { getViewer, validOrigin } from "./browser-auth.ts";
+import { configured, database } from "./server-config.ts";
+import { staffAccount, membershipRoles } from "./server-service.ts";
 import {
   allMemberships,
   assignedRoles,
@@ -17,14 +17,14 @@ import {
   searchMembers,
   setRole,
   type Membership,
-} from "@/lib/roblox-server";
+} from "./roblox-server.ts";
 import {
   authorizeCommand,
   eligibleTarget,
   parseCommand,
   resolveRole,
-} from "@/lib/command-rules";
-import { initialRoles, type Job } from "@/lib/ranking-types";
+} from "./command-rules.ts";
+import { initialRoles, type Job } from "./ranking-types.ts";
 
 export const dynamic = "force-dynamic";
 type Item = {
@@ -65,7 +65,7 @@ const safeJob = (job: SavedJob): Job => ({
 
 export async function GET(request: Request) {
   try {
-    const viewer = await getChatGPTUser();
+    const viewer = await getViewer(request);
     const query = new URL(request.url).searchParams.get("q");
     if (query !== null) {
       if (!viewer) return reply({ error: "Sign in first." }, 401);
@@ -109,9 +109,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const viewer = await getChatGPTUser();
+    const viewer = await getViewer(request);
     if (!viewer) return reply({ error: "Sign in first." }, 401);
-    if (request.headers.get("origin") !== new URL(request.url).origin)
+    if (!validOrigin(request))
       return reply({ error: "Invalid request origin." }, 403);
     if (!request.headers.get("content-type")?.startsWith("application/json"))
       return reply({ error: "JSON required." }, 415);
@@ -119,56 +119,6 @@ export async function POST(request: Request) {
     if (text.length > 4096) return reply({ error: "Request too large." }, 413);
     const body = JSON.parse(text) as Record<string, unknown>;
     const siteUserId = viewer.userId;
-
-    if (body.action === "beginVerification") {
-      const user = await exactUser(String(body.username || ""));
-      const roles = await getRoles(true);
-      if (
-        (assignedRoles(await membership(String(user.id)), roles)[0]?.rank ||
-          0) < 9
-      )
-        throw new Error(
-          "That account must be Admin rank 9 or higher in this community.",
-        );
-      const code = `AUTH-${Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-      const proof = await database<{
-        code: string;
-        expires_at: string;
-        roblox_id: string;
-      }>("beginProof", {
-        siteUserId,
-        userId: String(user.id),
-        username: user.name,
-        code,
-      });
-      return reply({
-        code: proof.code,
-        expiresAt: proof.expires_at,
-        userId: proof.roblox_id,
-      });
-    }
-    if (body.action === "verifyProfile") {
-      const proof = await database<{
-        code: string;
-        expires_at: string;
-        roblox_id: string;
-      } | null>("proof", { siteUserId });
-      if (!proof || Date.parse(proof.expires_at) <= Date.now())
-        throw new Error("The code expired. Request a new verification code.");
-      const user = await profile(proof.roblox_id);
-      if (!user.description?.includes(proof.code))
-        throw new Error(
-          "The code is not in your Roblox About description yet. Save it on Roblox, then verify again.",
-        );
-      const roles = await getRoles(true);
-      if (
-        (assignedRoles(await membership(proof.roblox_id), roles)[0]?.rank ||
-          0) < 9
-      )
-        throw new Error("Your community rank is below Admin (9).");
-      await database("finishProof", { siteUserId, code: proof.code });
-      return reply({ verified: true });
-    }
 
     const staff = await staffAccount(siteUserId);
     if (body.action === "preview") {

@@ -159,6 +159,51 @@ test("demotion removes old higher roles and verifies the resulting set", async (
   }
 });
 
+test("Members with an empty extra-role list remain eligible for promotion", () => {
+  const member = {
+    path: "groups/526651322/memberships/example",
+    user: "users/200",
+    role: rolePath(memberRole),
+    roles: [],
+  };
+  assert.deepEqual(roblox.membershipRolePaths(member), [rolePath(memberRole)]);
+  assert.deepEqual(roblox.assignedRoles(member, roles), [memberRole]);
+  assert.equal(rules.eligibleTarget(
+    rules.parseCommand("Promote AdrianAspher 7"), "100", 255, "200",
+    roblox.assignedRoles(member, roles)[0].rank, moderator,
+  ), true);
+  assert.deepEqual(roblox.membershipRolePaths(null), []);
+  assert.deepEqual(roblox.membershipRolePaths({ ...member, role: undefined }), []);
+});
+
+test("demoting to Member confirms Roblox's empty extra-role list", async () => {
+  const realFetch = globalThis.fetch;
+  const member = {
+    path: "groups/526651322/memberships/example",
+    user: "users/200",
+    role: rolePath(moderator),
+    roles: [rolePath(moderator)],
+  };
+  const writes = [];
+  globalThis.fetch = async (url, init) => {
+    if (init.method === "POST") {
+      writes.push({ url, role: JSON.parse(init.body).role });
+      return Response.json({});
+    }
+    return Response.json({ groupMemberships: [{
+      ...member, role: rolePath(memberRole), roles: [],
+    }] });
+  };
+  try {
+    await roblox.setRole(member, memberRole, roles);
+    assert.equal(writes.length, 2);
+    assert.match(writes[1].url, /:unassignRole$/);
+    assert.equal(writes[1].role, rolePath(moderator));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("incomplete Roblox changes cannot be reported as success", async () => {
   const realFetch = globalThis.fetch;
   const member = {

@@ -1,5 +1,5 @@
-import { GROUP_ID, setting } from "./server-config";
-import type { Role } from "./ranking-types";
+import { GROUP_ID, setting } from "./server-config.ts";
+import type { Role } from "./ranking-types.ts";
 
 export type Membership = {
   path: string;

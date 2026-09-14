@@ -44,7 +44,14 @@ type Inspection = {
   roles: Role[];
 };
 
-async function request<T>(
+export type ConsoleClient = {
+  request<T>(action: string, data?: Record<string, unknown>): Promise<T>;
+  read(): Promise<State>;
+  suggest(query: string, signal: AbortSignal): Promise<{ members: Staff[] }>;
+  logout(): Promise<void>;
+};
+
+async function siteRequest<T>(
   action: string,
   data: Record<string, unknown> = {},
 ): Promise<T> {
@@ -59,7 +66,8 @@ async function request<T>(
   return result;
 }
 
-export default function Console({ signedIn }: { signedIn: boolean }) {
+export default function Console({ signedIn, client }: { signedIn: boolean; client?: ConsoleClient }) {
+  const request = client?.request || siteRequest;
   const [state, setState] = useState<State>({
     roles: initialRoles,
     staff: null,
@@ -91,14 +99,18 @@ export default function Console({ signedIn }: { signedIn: boolean }) {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch("/api/console", { cache: "no-store" });
-      const data = (await res.json()) as State & { error?: string };
-      if (!res.ok) throw new Error(data.error);
+      let data: State;
+      if (client) data = await client.read();
+      else {
+        const res = await fetch("/api/console", { cache: "no-store" });
+        data = await res.json();
+        if (!res.ok) throw new Error((data as State & { error?: string }).error);
+      }
       setState(data);
     } catch (e) {
       setError((e as Error).message);
     }
-  }, []);
+  }, [client]);
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -120,12 +132,15 @@ export default function Console({ signedIn }: { signedIn: boolean }) {
     const abort = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `/api/console?q=${encodeURIComponent(match[1])}`,
-          { signal: abort.signal },
-        );
-        const data = (await res.json()) as { members: Staff[] };
-        if (res.ok) setSuggestions(data.members);
+        if (client) setSuggestions((await client.suggest(match[1], abort.signal)).members);
+        else {
+          const res = await fetch(
+            `/api/console?q=${encodeURIComponent(match[1])}`,
+            { signal: abort.signal },
+          );
+          const data = (await res.json()) as { members: Staff[] };
+          if (res.ok) setSuggestions(data.members);
+        }
       } catch {
         /* A changed query cancels its earlier suggestion request. */
       }
@@ -134,7 +149,7 @@ export default function Console({ signedIn }: { signedIn: boolean }) {
       clearTimeout(timer);
       abort.abort();
     };
-  }, [command, canCommand]);
+  }, [command, canCommand, client]);
 
   async function verify(stage: string) {
     setBusy(stage);
@@ -220,7 +235,7 @@ export default function Console({ signedIn }: { signedIn: boolean }) {
   return (
     <div className="console-shell">
       <header className="topbar">
-        <a href="/" className="brand">
+        <a href={client ? "./" : "/"} className="brand">
           <span className="brand-mark">
             <ShieldCheck size={24} strokeWidth={1.6} />
           </span>
@@ -230,7 +245,21 @@ export default function Console({ signedIn }: { signedIn: boolean }) {
         </a>
         <div className="topbar-right">
           <span className="community-id">COMMUNITY / 526651322</span>
-          {signedIn ? (
+          {client ? (
+            state.staff ? <button className="text-link" disabled={working} onClick={async () => {
+              setBusy("logout");
+              try {
+                await client.logout();
+                setJob(null);
+                setInspection(null);
+                setProof(null);
+                setError("");
+                setMessage("Signed out.");
+                await refresh();
+              } catch (e) { setError((e as Error).message); }
+              finally { setBusy(""); }
+            }}>Sign out</button> : <a className="text-link" href="#staff-access">Verify Roblox profile</a>
+          ) : signedIn ? (
             <a
               className="text-link"
               href="/signout-with-chatgpt?return_to=/"
@@ -589,7 +618,7 @@ export default function Console({ signedIn }: { signedIn: boolean }) {
             </section>
           </div>
           <aside className="side-column">
-            <section className="panel staff-panel">
+            <section className="panel staff-panel" id="staff-access">
               <div className="panel-heading">
                 <div className="section-title">
                   <ShieldCheck size={17} />
@@ -666,12 +695,12 @@ export default function Console({ signedIn }: { signedIn: boolean }) {
                     </span>
                     <h3>
                       {signedIn
-                        ? "Connect your Roblox account"
+                        ? "Verify your Roblox account"
                         : "Your community. Your command."}
                     </h3>
                     <p>
                       {signedIn
-                        ? "Verify your profile once to confirm this Roblox account belongs to you."
+                        ? "Verify your profile to confirm this Roblox account belongs to you."
                         : "Commands are available to verified community members ranked Admin or higher."}
                     </p>
                     {signedIn ? (
